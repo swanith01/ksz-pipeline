@@ -1,0 +1,61 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+# Keep notebooks committed, but strip outputs before committing:
+#   pip install nbstripout && nbstripout --install
+
+# ── Large simulation outputs (NEVER commit these) ─────────────────────────────
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.fits
+*.pkl
+*.pickle
+# 21cmFAST cache and output directories
+CosmoHammer_*/
+21cmFAST_cache/
+Boxes/
+LightCones/
+IonizedBoxes/
+PerturbedFields/
+
+# ── Figures / outputs ─────────────────────────────────────────────────────────
+# Commit only the *scripts* that make figures, not the rendered outputs
+*.pdf
+*.png
+*.eps
+*.svg
+# Exception: committed reference figures for the paper (uncomment if needed)
+# !paper/figures/*.pdf
+
+# ── HPC / job system ──────────────────────────────────────────────────────────
+*.o[0-9]*
+*.e[0-9]*
+core.*
+*.log
+
+# ── OS / editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# ── Local config overrides ────────────────────────────────────────────────────
+# Put machine-specific paths in a local yaml, never commit it
+configs/local.yaml

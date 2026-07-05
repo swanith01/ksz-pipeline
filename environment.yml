@@ -1,0 +1,20 @@
+name: ksz-pipeline
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy
+  - matplotlib
+  - astropy
+  - h5py
+  - pyyaml
+  - pandas        # Georgiev CSV loading in lightcone script
+  - jupyter
+  - ipykernel
+  - tqdm
+  - pip
+  - pip:
+      - camb                # linear theory P_vv comparison (kSZBoxes.py)
+      - 21cmFAST==3.4.0     # cluster uses 3.3.1 — install manually there

@@ -1,0 +1,24 @@
+#!/bin/bash
+#PBS -N ksz_scan
+#PBS -l select=1:ncpus=8:mem=32gb
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -o logs/scan_${PBS_ARRAY_INDEX}.log
+#PBS -J 1-10          # adjust to number of variants
+
+# ── Environment ───────────────────────────────────────────────────────────────
+module load anaconda3
+conda activate ksz-pipeline
+
+cd $PBS_O_WORKDIR
+
+# ── Select config variant by array index ─────────────────────────────────────
+# Each variant yaml lives in configs/variants/variant_${PBS_ARRAY_INDEX}.yaml
+VARIANT_CONFIG="configs/variants/variant_${PBS_ARRAY_INDEX}.yaml"
+
+if [ ! -f "$VARIANT_CONFIG" ]; then
+    echo "ERROR: config not found: $VARIANT_CONFIG"
+    exit 1
+fi
+
+python scripts/06_reion_history_scan.py --config "$VARIANT_CONFIG"

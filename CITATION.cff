@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this pipeline, please cite it as below."
+authors:
+  - family-names: Upadhye
+    given-names: Swanith
+title: "ksz-pipeline: kSZ power spectrum pipeline for the kSZ-LAE cross-correlation paper"
+version: 0.1.0
+date-released: 2026-07-05
+url: "https://github.com/swanith01/ksz-pipeline"

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ksz-pipeline"
+version = "0.1.0"
+description = "kSZ power spectrum pipeline (lightcone + coeval boxes) for the kSZ-LAE paper"
+authors = [
+  { name = "Swanith Upadhye" },
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "scipy",
+  "matplotlib",
+  "astropy",
+  "h5py",
+  "pyyaml",
+  "tqdm",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100

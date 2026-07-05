@@ -1,0 +1,15 @@
+#!/bin/bash
+#PBS -N ksz_lightcone
+#PBS -l select=1:ncpus=16:mem=64gb
+#PBS -l walltime=12:00:00
+#PBS -j oe
+#PBS -o logs/lightcone_ksz.log
+
+# ── Environment ───────────────────────────────────────────────────────────────
+module load anaconda3          # adjust for your cluster's module system
+conda activate ksz-pipeline
+
+cd $PBS_O_WORKDIR
+
+# ── Run ───────────────────────────────────────────────────────────────────────
+python scripts/01_make_ksz_lightcone_maps.py --config configs/fiducial.yaml

@@ -3,9 +3,9 @@
 
 # ── Data paths ────────────────────────────────────────────────────────────────
 data:
-  cache_dir: _cache/                   # 21cmFAST cache (lightcone_ksz.py default)
-  plot_dir:  28May2026_patchy_tau/plots/
-  output_dir: /path/to/outputs/
+  cache_dir: data/cache/       # 21cmFAST cache — gitignored, stays local
+  plot_dir:  data/plots/       # rendered figures — gitignored, stays local
+  output_dir: data/products/   # final .npy/.npz products — committed to git
 
 # ── 21cmFAST simulation parameters ───────────────────────────────────────────
 21cmfast:

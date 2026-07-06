@@ -110,8 +110,11 @@ def main(config_path, angle_deg=None, use_patchy=None):
     v_los_Mpc_s   = lightcone.velocity[:, :, ind_z] / 67.4
 
     print("Integrating kSZ map...")
-    ksz_map = compute_ksz_map(density_1plus, x_HII_field, v_los_Mpc_s,
-                               red_axis, ds, visibility_3D)
+    ksz_map_raw = compute_ksz_map(density_1plus, x_HII_field, v_los_Mpc_s,
+                                   red_axis, ds, visibility_3D)
+    ksz_map_flat = ksz_map_raw.squeeze().ravel()
+    Nside = int(np.sqrt(len(ksz_map_flat)))
+    ksz_map = ksz_map_flat[:Nside**2].reshape(Nside, Nside)
 
     print("Computing D_ell...")
     ell, Dl, Dl_err = ksz_map_to_Dl(ksz_map, Lbox)

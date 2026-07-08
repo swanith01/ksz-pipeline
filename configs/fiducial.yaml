@@ -28,7 +28,7 @@ data:
 # ── Lightcone kSZ settings ────────────────────────────────────────────────────
 lightcone_ksz:
   skew_angle_deg: 10.0
-  Nlos: 3000                    # number of skewers
+  Nlos: 16384   # = HII_DIM^2, required for the square reshape in ksz_map_to_Dl
   use_patchy_screening: false   # true → e^{-τ(n̂,<z)}, false → e^{-τ̄(z)}
 
 # ── Coeval-box kSZ settings ───────────────────────────────────────────────────

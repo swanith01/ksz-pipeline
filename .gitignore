@@ -39,3 +39,5 @@ logs/
 
 # ── Local config (machine-specific path overrides) ────────────────────────────
 configs/local.yaml
+data/products_quicktest/
+data/plots_quicktest/

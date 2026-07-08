@@ -25,6 +25,7 @@ from ksz_pipeline.ksz.optical_depth      import compute_tau, compute_visibility
 from ksz_pipeline.ksz.skewed_los         import make_los_grid, extract_skewers, RotatedLightcone
 from ksz_pipeline.ksz.patchy_screening   import compute_patchy_tau
 from ksz_pipeline.ksz.lightcone_integral import compute_ksz_map, ksz_map_to_Dl
+from ksz_pipeline.utils.constants        import H0_KM_S_MPC
 
 
 def main(config_path, angle_deg=None, use_patchy=None):
@@ -85,7 +86,13 @@ def main(config_path, angle_deg=None, use_patchy=None):
 
     Delta_3d = np.array(lightcone.density[:, :, ind_z],  dtype=np.float32) + 1.0
     xHI_3d   = np.array(lightcone.xH_box[:, :, ind_z],   dtype=np.float32)
-    vel_3d   = np.array(lightcone.velocity[:, :, ind_z],  dtype=np.float32) / 67.4
+    # NOTE: no /H0 here anymore. The previous code divided here AND again
+    # at v_los_Mpc_s below (line ~110), a double division that shrank the
+    # velocity -- and hence D_ell, which is quadratic in v -- by an extra
+    # factor of ~H0^2 ~ 4500. Conversion now happens exactly once, at
+    # v_los_Mpc_s. Whether that single division is itself correct is
+    # still unverified -- see the printed check below.
+    vel_3d   = np.array(lightcone.velocity[:, :, ind_z],  dtype=np.float32)
 
     LOS_ind = make_los_grid(lc_cfg['Nlos'], Ndim)
     lc_unrot, lc_rot = extract_skewers(
@@ -105,9 +112,26 @@ def main(config_path, angle_deg=None, use_patchy=None):
             lightcone.density, lightcone.xH_box, ind_z, ds, z_mid)
 
     # kSZ map
+    raw_density_mean = float(np.mean(lightcone.density[:, :, ind_z]))
+    print(f"  [check] mean(lightcone.density)  = {raw_density_mean:+.4f}  "
+          f"(want ~0, i.e. raw delta; if this is ~1, it's already (1+delta) "
+          f"and the '1.0 +' on the next line double-counts -- remove it)")
+
     density_1plus = 1.0 + lightcone.density[:, :, ind_z]
     x_HII_field   = 1.0 - lightcone.xH_box[:, :, ind_z]
-    v_los_Mpc_s   = lightcone.velocity[:, :, ind_z] / 67.4
+    # Single division now (was double -- see note above). Still unverified
+    # whether this /H0 belongs at all: py21cmfast v4's own compute_rsds()
+    # treats the raw velocity array as already being in Mpc/s with NO H
+    # division needed for the velocity itself (H division there is only
+    # used to build a displacement for RSDs). v3's internal convention may
+    # or may not match. The check below tells you which world you're in.
+    v_los_Mpc_s   = lightcone.velocity[:, :, ind_z] / H0_KM_S_MPC
+
+    v_rms = float(np.sqrt(np.mean(v_los_Mpc_s**2)))
+    print(f"  [check] rms(v_los_Mpc_s)         = {v_rms:.4e} Mpc/s  "
+          f"(want ~1e-17 to 1e-18 for a few-hundred-km/s peculiar velocity; "
+          f"if this is off by many orders of magnitude, remove the /H0 "
+          f"above entirely and re-check against this same target)")
 
     print("Integrating kSZ map...")
     ksz_map_raw = compute_ksz_map(density_1plus, x_HII_field, v_los_Mpc_s,

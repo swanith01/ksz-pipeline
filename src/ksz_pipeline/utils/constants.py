@@ -24,6 +24,11 @@ T_CMB_K = 2.7255
 # Speed of light [cm/s]
 C_CGS = const.c.cgs.value
 
+# Hubble constant today [km/s/Mpc], Planck18 -- was previously hardcoded
+# as a bare "67.4" in 01_make_ksz_lightcone_maps.py (also inconsistent
+# with Planck18's actual value). Centralized here so it's defined once.
+H0_KM_S_MPC = cosmo.H0.value
+
 
 def ne0_cgs(Y_He=0.24, include_He=True):
     """

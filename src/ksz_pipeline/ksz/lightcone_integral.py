@@ -54,18 +54,37 @@ def compute_ksz_map(density_1plus, x_HII_field, v_los_Mpc_s,
     return ksz_map
 
 
-def ksz_map_to_Dl(ksz_map, box_len_Mpc, chi_Mpc=7800.0, h=0.67, n_kbins=35):
+def ksz_map_to_Dl(ksz_map, box_len_Mpc, chi_Mpc=7800.0, h=None, n_kbins=35):
     """
     2D FFT power spectrum of the kSZ map -> D_ell [uK^2].
 
     Mirrors Cell 8 / angular_power_2d() from the lightcone script.
 
+    FIXED: previously multiplied Cl by an extra h**2 * 36 factor.
+    Neither belongs here:
+      - box_len_Mpc, pix_Mpc, and chi_Mpc (from astropy Planck18) are all
+        already pure comoving Mpc (no little-h), so no h factor is needed
+        anywhere in this conversion. `h` is accepted but ignored, kept
+        only so existing call sites don't break; drop it once callers
+        are updated.
+      - the 36 = (1 + z_end)**2 was a physical kSZ factor, but that
+        (1+z)**2 is already applied per-slice inside compute_ksz_map()
+        (via a_squared/a2_mid) when the map itself was built. Applying
+        it again here double-counts it -- this step should be pure
+        geometry: ell = k*chi, Cl = P(k)/chi**2.
+      - Even with that fixed, this ell = k*chi_Mpc conversion is itself
+        only exact for a genuinely angular map (see angular_lightcone.py
+        / angular_ksz_map_to_Dl). For a rectilinear lightcone (this
+        function), a single reference chi_Mpc is an approximation since
+        the map stacks slices spanning a real range in comoving distance
+        -- treat this Dl as good to the level that approximation holds.
+
     Parameters
     ----------
     ksz_map     : ndarray (Npix, Npix)  dimensionless delta_T/T map
     box_len_Mpc : float                 physical side length [Mpc]
-    chi_Mpc     : float                 comoving distance proxy for ell<->k
-    h           : float                 dimensionless Hubble parameter
+    chi_Mpc     : float                 reference comoving distance for ell<->k
+    h           : unused, kept for backward-compatible call signatures
     n_kbins     : int                   number of radial k bins
 
     Returns
@@ -107,9 +126,9 @@ def ksz_map_to_Dl(ksz_map, box_len_Mpc, chi_Mpc=7800.0, h=0.67, n_kbins=35):
         else:
             P1d[i] = np.nan
 
-    ell    = k_centers * chi_Mpc / h
-    Cl     = P1d * h**2 * 36 / chi_Mpc**2
-    Cl_err = Err * h**2 * 36 / chi_Mpc**2
+    ell    = k_centers * chi_Mpc
+    Cl     = P1d / chi_Mpc**2
+    Cl_err = Err / chi_Mpc**2
     fac    = ell * (ell + 1) / (2.0 * np.pi) * T_CMB_uK**2
     Dl     = Cl     * fac
     Dl_err = Cl_err * fac

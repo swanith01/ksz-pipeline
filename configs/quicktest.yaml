@@ -1,0 +1,62 @@
+# Quicktest configuration -- small box, low resolution, for pipeline
+# smoke-testing only. NOT science-quality: 32^3/100 Mpc has very few
+# k-modes and huge sample variance. Use this to confirm the pipeline
+# runs end to end and the diagnostic prints look physically sane
+# (patchy z-range, tau0, v_los_Mpc_s magnitude) -- not to read real
+# physics off the resulting D_ell.
+#
+# cache_dir and output_dir are separate from fiducial.yaml's on purpose:
+# 02's caching keys off cache_dir alone, so sharing it with fiducial
+# would mean a later full run could silently load these tiny cached
+# boxes instead of computing real ones. output_dir being wired to this
+# file at all is itself new -- see the two scripts, which previously
+# hardcoded "data/products" regardless of this setting.
+
+data:
+  cache_dir: data/cache_quicktest/
+  plot_dir:  data/plots_quicktest/
+  output_dir: data/products_quicktest/
+
+21cmfast:
+  HII_DIM: 32
+  BOX_LEN: 100.0
+  N_THREADS: 8            # check `nproc` on your desktop and adjust
+  random_seed: 37
+  z_min: 4.0
+  z_max: 20.0
+  HII_DIM_coeval: 32
+  HII_EFF_FACTOR: 30.0
+
+lightcone_ksz:
+  skew_angle_deg: 0.0
+  Nlos: 1024               # = HII_DIM^2 = 32^2 -- MUST match HII_DIM above.
+                            # This is the exact bug we fixed in fiducial.yaml
+                            # for HII_DIM=128 -- if you change HII_DIM here,
+                            # change this too (Nlos = HII_DIM^2), or
+                            # ksz_map_to_Dl's reshape silently truncates.
+  use_patchy_screening: false
+
+coeval_ksz:
+  # Coarser and shorter than fiducial's grid, for speed -- still spans
+  # 20 down to 4 with enough points to exercise the xH_mean patchy
+  # filter meaningfully (some points should land outside the patchy
+  # window at both ends).
+  z_snapshots: [20.0, 19.0, 18.0, 17.0, 16.0, 15.5, 15.0, 14.5, 14.0, 13.5,
+                13.0, 12.5, 12.0, 11.5, 11.0, 10.5, 10.0,  9.5,  9.0,  8.5,
+                 8.0,  7.5,  7.0,  6.5,  6.0,  5.5,  5.0,  4.5,  4.0]
+  chi_proxy_Mpc: 7800.0
+
+# ── Convergence sweeps ────────────────────────────────────────────────────────
+convergence:
+  dz_multiples: [1, 2, 4]
+  fixed_dx_mpc: 3.125                        # boxsize sweep: dx held fixed
+  box_lens: [50, 100]      # Mpc
+  ref_box_len: 100.0                        # resolution sweep: BOX_LEN held fixed
+  hii_dims: [16, 32]
+
+power_spectrum:
+  n_kbins: 35
+  ell_min: 100
+  ell_max: 31623
+  n_ell_bins: 80
+  T_CMB_K: 2.7255

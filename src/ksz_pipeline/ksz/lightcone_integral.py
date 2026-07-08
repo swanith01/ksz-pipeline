@@ -13,7 +13,7 @@ from ..utils.constants import SIGMA_T, MPC_CM, C_CGS, T_CMB_K, NE0_HYDROGEN_ONLY
 
 
 def compute_ksz_map(density_1plus, x_HII_field, v_los_Mpc_s,
-                    red_axis, ds, visibility_3D, ne0=None):
+                    red_axis, ds, visibility_3D, ne0=None, patchy_mask_3D=None):
     """
     LOS-integrated kSZ temperature fluctuation map delta_T/T (dimensionless).
 
@@ -21,13 +21,24 @@ def compute_ksz_map(density_1plus, x_HII_field, v_los_Mpc_s,
 
     Parameters
     ----------
-    density_1plus : ndarray (..., Nz)   1 + delta
-    x_HII_field   : ndarray (..., Nz)   ionized fraction = 1 - x_HI
-    v_los_Mpc_s   : ndarray (..., Nz)   LOS velocity [Mpc/s] = lightcone.velocity / H0
-    red_axis      : ndarray (Nz,)       redshift at each slice
-    ds            : ndarray (Nz-1,)     comoving slice widths [Mpc]
-    visibility_3D : ndarray (..., Nz)   exp(-tau) broadcast to field shape
-    ne0           : float, optional     [cm^-3], defaults to NE0_HYDROGEN_ONLY
+    density_1plus  : ndarray (..., Nz)   1 + delta
+    x_HII_field    : ndarray (..., Nz)   ionized fraction = 1 - x_HI
+    v_los_Mpc_s    : ndarray (..., Nz)   LOS velocity [Mpc/s] = lightcone.velocity / H0
+    red_axis       : ndarray (Nz,)       redshift at each slice
+    ds             : ndarray (Nz-1,)     comoving slice widths [Mpc]
+    visibility_3D  : ndarray (..., Nz)   exp(-tau) broadcast to field shape
+    ne0            : float, optional     [cm^-3], defaults to NE0_HYDROGEN_ONLY
+    patchy_mask_3D : ndarray (..., Nz), optional   from
+                     optical_depth.compute_patchy_mask(); zeroes out
+                     slices outside the 99.99%-to-0.01%-neutral patchy
+                     regime so the signal integral doesn't pick up the
+                     homogeneous (fully-ionized) kSZ contribution.
+                     Defaults to None (no clipping -- includes the full
+                     z_min..z_max range, matching the old behavior). Note
+                     this only clips the SIGNAL sum; visibility_3D should
+                     still be built from the FULL, unclipped tau(z), since
+                     the homogeneous stretch still needs to count toward
+                     the optical depth suppressing higher-z contributions.
 
     Returns
     -------
@@ -43,6 +54,8 @@ def compute_ksz_map(density_1plus, x_HII_field, v_los_Mpc_s,
     a_squared = a**2
 
     integrand_base = density_1plus * x_HII_field * v_los_Mpc_s / c_Mpc_s
+    if patchy_mask_3D is not None:
+        integrand_base = integrand_base * patchy_mask_3D
     integrand_vis  = integrand_base * visibility_3D
 
     integ_mid = 0.5 * (integrand_vis[..., :-1] + integrand_vis[..., 1:])

@@ -14,7 +14,7 @@ data:
   BOX_LEN: 800.0         # Mpc
   N_THREADS: 32
   random_seed: 37
-  z_min: 5.0
+  z_min: 4.0
   z_max: 20.0
 
   # Coeval boxes
@@ -34,11 +34,18 @@ lightcone_ksz:
 # ── Coeval-box kSZ settings ───────────────────────────────────────────────────
 coeval_ksz:
   # Redshift grid used in kSZBoxes.py (ZS list)
-  z_snapshots: [16.0, 15.5, 15.0, 14.5, 14.0, 13.5, 13.0, 12.5, 12.0, 11.5,
-                11.0, 10.5, 10.0,  9.5,  9.0,  8.5,  8.0,  7.5,  7.0,  6.5,
-                 6.0,  5.5,  5.0,  4.5,  4.0,  3.5,  3.0,  2.5,  2.0,  1.5,
-                 1.0,  0.5,  0.001]
+  z_snapshots: [20.0, 19.0, 18.0, 17.0, 16.0, 15.5, 15.0, 14.5, 14.0, 13.5,
+                13.0, 12.5, 12.0, 11.5, 11.0, 10.5, 10.0,  9.5,  9.0,  8.5,
+                 8.0,  7.5,  7.0,  6.5,  6.0,  5.5,  5.0,  4.5,  4.0]
   chi_proxy_Mpc: 7800.0         # comoving distance proxy for ℓ↔k mapping
+  
+# ── Convergence sweeps ────────────────────────────────────────────────────────
+convergence:
+  dz_multiples: [1, 2, 4]
+  fixed_dx_mpc: 6.25                        # boxsize sweep: dx held fixed
+  box_lens: [200, 400, 600, 800, 1000]      # Mpc
+  ref_box_len: 800.0                        # resolution sweep: BOX_LEN held fixed
+  hii_dims: [32, 64, 128, 256, 512]
 
 # ── Power spectrum ────────────────────────────────────────────────────────────
 power_spectrum:

@@ -24,6 +24,7 @@ D_ell = l(l+1)/(2pi) * C_ell * T_CMB^2 [uK^2]
 import numpy as np
 from astropy.cosmology import Planck18 as cosmo
 from ..utils.constants import SIGMA_T, MPC_CM, C_CGS, T_CMB_K, ne0_cgs
+from ..ksz.optical_depth import analytic_tau_below
 
 
 def _interp_loglog(xq, xp, fp):
@@ -76,9 +77,17 @@ def compute_cell(results_qperp, ells_full=None, ne0=None):
     pref    = (SIGMA_T * ne0 / C_CGS)**2    # [s^2 cm^-4]
     c_cms   = C_CGS
 
-    # Ascending redshift grid (EoR only, z >= 5)
-    ZS_asc  = np.array(sorted([z for z in results_qperp.keys()
-                                if z >= 5.0]), dtype=float)
+    # Patchy regime only: 99.99% neutral to 0.01% neutral (xH_mean bounds),
+    # not a hardcoded redshift. FIXED: previously "z >= 5.0", a fixed
+    # redshift that isn't guaranteed to track the true start/end of the
+    # patchy regime across simulation setups or code versions -- xH_mean
+    # is already computed per snapshot, so use it directly instead.
+    XHI_MIN_PATCHY = 1.0e-4          # 0.01% neutral -> end of patchy regime
+    XHI_MAX_PATCHY = 1.0 - 1.0e-4    # 99.99% neutral -> start of patchy regime
+    ZS_asc = np.array(sorted([z for z in results_qperp.keys()
+                               if XHI_MIN_PATCHY <= results_qperp[z]['xH_mean']
+                                                  <= XHI_MAX_PATCHY]),
+                       dtype=float)
 
     chi_mpc  = np.array([cosmo.comoving_distance(z).value for z in ZS_asc])
     dchi_mpc = np.abs(np.gradient(chi_mpc))
@@ -86,8 +95,14 @@ def compute_cell(results_qperp, ells_full=None, ne0=None):
 
     xe_arr = np.array([1.0 - results_qperp[z]['xH_mean'] for z in ZS_asc])
 
-    # Optical depth tau(z)
-    tau = np.zeros_like(ZS_asc)
+    # Optical depth tau(z). FIXED: previously started tau=0 at the lowest
+    # kept redshift (ZS_asc.min(), >=5 due to the patchy-only filter
+    # above), silently dropping the real tau accumulated from z=0 to
+    # there -- roughly half the true total for a typical z_min~5-6 (see
+    # analytic_tau_below()'s docstring). That made e^{-2tau(z)} too large
+    # at every z, inflating D_ell by roughly exp(2*tau_below) ~ 6-8%.
+    tau0 = analytic_tau_below(ZS_asc.min())
+    tau  = np.full_like(ZS_asc, tau0)
     for i in range(len(ZS_asc) - 1):
         zmid   = 0.5 * (ZS_asc[i]  + ZS_asc[i + 1])
         xe_mid = 0.5 * (xe_arr[i]  + xe_arr[i + 1])

@@ -2,7 +2,8 @@
 """
 Script 01: Run lightcone simulation and compute kSZ map + D_ell.
 
-Produces
+Produces (paths below are the fiducial.yaml default; actual location is
+data.output_dir in whichever --config is used)
 --------
 data/products/ksz_map_lightcone.npy         -- 2D delta_T/T map
 data/products/ksz_Dl_lightcone.npz          -- ell, Dl, Dl_err [uK^2]
@@ -21,11 +22,11 @@ import yaml
 import numpy as np
 import py21cmfast as p21c
 
-from ksz_pipeline.ksz.optical_depth      import compute_tau, compute_visibility
+from ksz_pipeline.ksz.optical_depth      import (compute_tau, compute_visibility,
+                                                   analytic_tau_below, compute_patchy_mask)
 from ksz_pipeline.ksz.skewed_los         import make_los_grid, extract_skewers, RotatedLightcone
 from ksz_pipeline.ksz.patchy_screening   import compute_patchy_tau
 from ksz_pipeline.ksz.lightcone_integral import compute_ksz_map, ksz_map_to_Dl
-from ksz_pipeline.utils.constants        import H0_KM_S_MPC
 
 
 def main(config_path, angle_deg=None, use_patchy=None):
@@ -70,8 +71,22 @@ def main(config_path, angle_deg=None, use_patchy=None):
     x_e_nodes  = 1.0 - lightcone.global_xH[::-1]
     z_nodes    = lightcone.node_redshifts[::-1]
     x_e_interp = np.interp(red_axis, z_nodes, x_e_nodes)
-    z_mid, ds, dtau, tau = compute_tau(x_e_interp, red_axis, pos_axis)
+    tau0 = analytic_tau_below(red_axis.min())
+    z_mid, ds, dtau, tau = compute_tau(x_e_interp, red_axis, pos_axis, tau0=tau0)
+    print(f"  tau(0 -> z_min={red_axis.min():.2f}) = {tau0:.4f}  "
+          f"(previously assumed 0 -- see optical_depth.analytic_tau_below)")
     tau_at_lc, visibility, visibility_3D = compute_visibility(tau, red_axis, z_mid)
+
+    patchy_mask, patchy_mask_3D = compute_patchy_mask(x_e_interp)
+    z_patchy = red_axis[patchy_mask.astype(bool)]
+    if z_patchy.size > 0:
+        print(f"  Patchy regime (99.99% to 0.01% neutral): "
+              f"z = {z_patchy.max():.2f} -> {z_patchy.min():.2f} "
+              f"({z_patchy.size}/{len(red_axis)} slices kept)")
+    else:
+        print("  WARNING: no slices fall inside the patchy regime -- "
+              "check that the simulated z range actually brackets "
+              "reionization (x_e should cross both 1e-4 and 1-1e-4).")
 
     # Skewed ray extraction
     Ndim      = int(user_params.HII_DIM)
@@ -114,28 +129,29 @@ def main(config_path, angle_deg=None, use_patchy=None):
     # kSZ map
     raw_density_mean = float(np.mean(lightcone.density[:, :, ind_z]))
     print(f"  [check] mean(lightcone.density)  = {raw_density_mean:+.4f}  "
-          f"(want ~0, i.e. raw delta; if this is ~1, it's already (1+delta) "
-          f"and the '1.0 +' on the next line double-counts -- remove it)")
+          f"(CONFIRMED ~1 via quicktest 8Jul2026: lightcone.density is "
+          f"already (1+delta) post-rotation -- density_1plus now uses it "
+          f"directly, no extra '1.0 +')")
 
-    density_1plus = 1.0 + lightcone.density[:, :, ind_z]
+    density_1plus = lightcone.density[:, :, ind_z]
     x_HII_field   = 1.0 - lightcone.xH_box[:, :, ind_z]
-    # Single division now (was double -- see note above). Still unverified
-    # whether this /H0 belongs at all: py21cmfast v4's own compute_rsds()
-    # treats the raw velocity array as already being in Mpc/s with NO H
-    # division needed for the velocity itself (H division there is only
-    # used to build a displacement for RSDs). v3's internal convention may
-    # or may not match. The check below tells you which world you're in.
-    v_los_Mpc_s   = lightcone.velocity[:, :, ind_z] / H0_KM_S_MPC
+    # No division by H0. Quicktest 8Jul2026: with the single division kept,
+    # v/c ~ 3e-5 (too small for peculiar velocities); removing it entirely
+    # gives v/c ~ 2.1e-3 (627 km/s RMS) -- physically sensible, and matches
+    # py21cmfast v4's compute_rsds() convention that the raw velocity array
+    # is already Mpc/s with no H division needed for the velocity itself
+    # (H division there only builds an RSD displacement). Confirmed for
+    # this v3.4.0 install by the check below.
+    v_los_Mpc_s   = lightcone.velocity[:, :, ind_z]
 
     v_rms = float(np.sqrt(np.mean(v_los_Mpc_s**2)))
     print(f"  [check] rms(v_los_Mpc_s)         = {v_rms:.4e} Mpc/s  "
-          f"(want ~1e-17 to 1e-18 for a few-hundred-km/s peculiar velocity; "
-          f"if this is off by many orders of magnitude, remove the /H0 "
-          f"above entirely and re-check against this same target)")
+          f"(want ~1e-17 to 1e-18 for a few-hundred-km/s peculiar velocity)")
 
     print("Integrating kSZ map...")
     ksz_map_raw = compute_ksz_map(density_1plus, x_HII_field, v_los_Mpc_s,
-                                   red_axis, ds, visibility_3D)
+                                   red_axis, ds, visibility_3D,
+                                   patchy_mask_3D=patchy_mask_3D)
     ksz_map_flat = ksz_map_raw.squeeze().ravel()
     Nside = int(np.sqrt(len(ksz_map_flat)))
     ksz_map = ksz_map_flat[:Nside**2].reshape(Nside, Nside)
@@ -144,14 +160,15 @@ def main(config_path, angle_deg=None, use_patchy=None):
     ell, Dl, Dl_err = ksz_map_to_Dl(ksz_map, Lbox)
 
     # Save
-    os.makedirs("data/products", exist_ok=True)
-    np.save("data/products/ksz_map_lightcone.npy", ksz_map)
-    np.savez("data/products/ksz_Dl_lightcone.npz",
+    out_dir = cfg['data']['output_dir'].rstrip('/')
+    os.makedirs(out_dir, exist_ok=True)
+    np.save(f"{out_dir}/ksz_map_lightcone.npy", ksz_map)
+    np.savez(f"{out_dir}/ksz_Dl_lightcone.npz",
              ell=ell, Dl=Dl, Dl_err=Dl_err)
-    np.savez("data/products/lightcone_reion_history.npz",
+    np.savez(f"{out_dir}/lightcone_reion_history.npz",
              z=red_axis, xe=x_e_interp, tau=tau_at_lc)
 
-    print(f"Saved to data/products/")
+    print(f"Saved to {out_dir}/")
     print(f"  kSZ map RMS : {np.sqrt(np.mean(ksz_map**2)):.4e}")
     print(f"  D_3000      : {float(np.interp(3000, ell, Dl)):.4e} uK^2")
 

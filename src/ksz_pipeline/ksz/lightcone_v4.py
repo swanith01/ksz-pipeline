@@ -151,6 +151,49 @@ def build_node_redshifts(z_min, z_max, n_nodes=30, margin=0.5):
 _REQUIRED_INTERNAL_QUANTITIES = ("brightness_temp",)
 
 
+def _reshape_angular_fields(fields, HII_DIM):
+    """
+    Angular lightcone fields come out (N_pix, N_z), flattened -- confirmed
+    via real output (13Jul2026): shape (1024, 634) for HII_DIM=32, and
+    1024 == 32**2 exactly, strongly suggesting a flattened HII_DIM x
+    HII_DIM grid (matching like_rectilinear's own pixel-size-matching
+    logic) rather than some other pixelization. Reshapes to
+    (HII_DIM, HII_DIM, N_z) so downstream code (process_common in
+    scripts/07_v4_angular_vs_rectilinear.py) can treat rectilinear and
+    angular fields identically -- neither that script nor
+    compute_ksz_map/angular_ksz_map_to_Dl need to know which lightconer
+    type produced the array.
+
+    NOT independently confirmed: the pixel ordering within the flattened
+    axis (assumed row-major/C-order, numpy's default, matching
+    like_rectilinear's presumed internal construction) -- if angular
+    D_ell comes out wrong by many more orders of magnitude after this
+    fix, mis-ordered pixels (not just wrong shape) is the next thing to
+    check, e.g. against LightCone.lightcone_coords.
+
+    Raises
+    ------
+    ValueError if N_pix isn't a perfect square matching HII_DIM^2 --
+    fails loudly rather than reshaping into something silently wrong.
+    """
+    reshaped = {}
+    for name, arr in fields.items():
+        if arr.ndim != 2:
+            reshaped[name] = arr
+            continue
+        n_pix, n_z = arr.shape
+        if n_pix != HII_DIM**2:
+            raise ValueError(
+                f"Angular field '{name}' has {n_pix} pixels, expected "
+                f"HII_DIM^2={HII_DIM**2}. The (N_pix,N_z)->(HII_DIM,HII_DIM,N_z) "
+                f"reshape assumption doesn't hold here -- don't reshape "
+                f"blindly, check the actual pixelization first."
+            )
+        reshaped[name] = arr.reshape(HII_DIM, HII_DIM, n_z)
+        print(f"  [check] reshaped '{name}': {arr.shape} -> {reshaped[name].shape}")
+    return reshaped
+
+
 def check_lightcone_fields(lightcone, expected_fields):
     """
     Fail loudly, immediately, with a clear message, if `lightcone.lightcones`
@@ -281,4 +324,5 @@ def run_angular(inputs, match_at_z, z_max, cache_dir,
         progressbar=False,
     )
     fields = check_lightcone_fields(lightcone, quantities)
+    fields = _reshape_angular_fields(fields, inputs.simulation_options.HII_DIM)
     return lightcone, fields

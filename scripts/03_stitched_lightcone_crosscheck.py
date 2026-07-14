@@ -69,6 +69,7 @@ def main(config_path):
         z_snapshots=z_snapshots, z_arr=z_arr,
         HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
         cache_dir=cache_dir, angle_deg=0.0,
+        N_THREADS=sim_cfg['N_THREADS'],
     )
 
     # density_1plus: exactly ONE "+1" -- stitched['density'] is raw delta.

@@ -57,7 +57,8 @@ def _georgiev_reconstruct(entry):
     return qperp_from_pee_pvv_pev(entry['k'], Pee_f, Pvv_f, Pev_f, **conv_kwargs)
 
 
-def run_one_config(BOX_LEN, HII_DIM, z_snapshots, cache_dir, tag, force=False):
+def run_one_config(BOX_LEN, HII_DIM, z_snapshots, cache_dir, tag, force=False,
+                    N_THREADS=None):
     """
     Compute direct (Cain) and Georgiev-reconstructed D_ell for one
     (BOX_LEN, HII_DIM) configuration. Caches per-redshift Pee/Pvv/Pev/
@@ -77,6 +78,11 @@ def run_one_config(BOX_LEN, HII_DIM, z_snapshots, cache_dir, tag, force=False):
                         configurations will silently share a cache file
     force             : bool, recompute even if a matching pickle cache
                         exists
+    N_THREADS         : int, optional -- see coeval/fields.py; pass
+                        explicitly (e.g. config's 21cmfast.N_THREADS)
+                        for anything beyond quick interactive testing --
+                        confirmed 14Jul2026 that omitting this silently
+                        runs single-threaded regardless of cores requested
 
     Returns
     -------
@@ -107,7 +113,8 @@ def run_one_config(BOX_LEN, HII_DIM, z_snapshots, cache_dir, tag, force=False):
     if missing:
         from ..coeval.fields import run_coeval_fields
     for z in missing:
-        delta, xH, vx, vy, vz = run_coeval_fields(z, HII_DIM, BOX_LEN, cache_dir)
+        delta, xH, vx, vy, vz = run_coeval_fields(
+            z, HII_DIM, BOX_LEN, cache_dir, N_THREADS=N_THREADS)
         k_q, P_q, P_std = qperp_power(delta, xH, vx, vy, vz, BOX_LEN)
         k_pee, Pee, Pvv, Pev = measure_pee_pvv_pev(delta, xH, vx, vy, vz, BOX_LEN)
         results[z] = dict(k=k_q, Pqperp=P_q, Pstd=P_std,
@@ -154,7 +161,7 @@ def run_one_config(BOX_LEN, HII_DIM, z_snapshots, cache_dir, tag, force=False):
                 ratios=ratios, results=results, results_subset=results_subset)
 
 
-def run_sweep(param_list, z_snapshots, cache_dir, force=False):
+def run_sweep(param_list, z_snapshots, cache_dir, force=False, N_THREADS=None):
     """
     Run run_one_config for each configuration in param_list.
 
@@ -165,6 +172,7 @@ def run_sweep(param_list, z_snapshots, cache_dir, force=False):
                    configuration in the sweep
     cache_dir    : str
     force        : bool
+    N_THREADS    : int, optional -- see run_one_config
 
     Returns
     -------
@@ -176,7 +184,7 @@ def run_sweep(param_list, z_snapshots, cache_dir, force=False):
         print(f"=== {tag}: BOX_LEN={BOX_LEN} Mpc, HII_DIM={HII_DIM} "
               f"(dx={dx:.3f} Mpc) ===", flush=True)
         out[tag] = run_one_config(BOX_LEN, HII_DIM, z_snapshots, cache_dir,
-                                   tag, force=force)
+                                   tag, force=force, N_THREADS=N_THREADS)
         print(f"  D_3000 direct={out[tag]['D3000_direct']:.4g} uK^2  "
               f"georgiev={out[tag]['D3000_georgiev']:.4g} uK^2", flush=True)
     return out

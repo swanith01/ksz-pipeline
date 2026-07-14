@@ -33,6 +33,7 @@ def main(config_path, sweep, force=False):
 
     conv_cfg   = cfg['convergence']
     z_snapshots = cfg['coeval_ksz']['z_snapshots']
+    sim_cfg    = cfg['21cmfast']
     cache_dir  = os.path.join(cfg['data']['cache_dir'], f"convergence_{sweep}_coeval")
     out_dir    = cfg['data']['output_dir'].rstrip('/')
     plot_dir   = cfg['data']['plot_dir'].rstrip('/')
@@ -44,7 +45,8 @@ def main(config_path, sweep, force=False):
     for L, N, tag in param_list:
         print(f"  {tag}: BOX_LEN={L} Mpc, HII_DIM={N}, dx={L/N:.3f} Mpc")
 
-    results = run_sweep(param_list, z_snapshots, cache_dir, force=force)
+    results = run_sweep(param_list, z_snapshots, cache_dir, force=force,
+                         N_THREADS=sim_cfg['N_THREADS'])
 
     # -- summary table --
     print(f"\n{'tag':<16} {'D3000_direct':>14} {'D3000_georgiev':>16}")

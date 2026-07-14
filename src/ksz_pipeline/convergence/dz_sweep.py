@@ -46,7 +46,7 @@ def build_dz_subsets(z_fine, dz_multiples):
 
 
 def run_dz_sweep_coeval(z_fine, dz_multiples, BOX_LEN, HII_DIM, cache_dir,
-                         tag, force=False):
+                         tag, force=False, N_THREADS=None):
     """
     Coeval Cain+Georgiev D_ell at multiple redshift-sampling densities,
     all subsets of z_fine, at FIXED (BOX_LEN, HII_DIM) -- isolates dz
@@ -64,6 +64,10 @@ def run_dz_sweep_coeval(z_fine, dz_multiples, BOX_LEN, HII_DIM, cache_dir,
     force        : bool, passed to the first (finest) call only --
                    forcing every subsequent subset call would defeat the
                    whole point of this function
+    N_THREADS    : int, optional -- see coeval/fields.py. Only the first
+                   (finest-grid) call below actually triggers new
+                   py21cmfast runs; passed to both anyway for safety in
+                   case dz_multiples doesn't fully cover what's cached.
 
     Returns
     -------
@@ -80,7 +84,7 @@ def run_dz_sweep_coeval(z_fine, dz_multiples, BOX_LEN, HII_DIM, cache_dir,
     print(f"  Populating fine-grid cache (dz_x{finest_m}, "
           f"{len(subsets[finest_m])} redshifts)...", flush=True)
     _ = run_one_config(BOX_LEN, HII_DIM, subsets[finest_m], cache_dir, tag,
-                        force=force)
+                        force=force, N_THREADS=N_THREADS)
 
     results = {}
     for m in sorted(dz_multiples):
@@ -89,7 +93,8 @@ def run_dz_sweep_coeval(z_fine, dz_multiples, BOX_LEN, HII_DIM, cache_dir,
               f"(subset of the cached fine grid, no new py21cmfast runs)",
               flush=True)
         results[label] = run_one_config(BOX_LEN, HII_DIM, subsets[m],
-                                         cache_dir, tag, force=False)
+                                         cache_dir, tag, force=False,
+                                         N_THREADS=N_THREADS)
         print(f"    D_3000 direct={results[label]['D3000_direct']:.4g} uK^2  "
               f"georgiev={results[label]['D3000_georgiev']:.4g} uK^2", flush=True)
     return results

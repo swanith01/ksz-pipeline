@@ -28,7 +28,7 @@ from ..utils.constants import MPC_CM
 
 
 def run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max, cache_dir,
-                    tag, angle_deg=0.0):
+                    tag, angle_deg=0.0, N_THREADS=None):
     """
     Stitch a lightcone and compute D_ell for one (BOX_LEN, HII_DIM)
     configuration. No pickle-level caching of its own here (unlike
@@ -47,6 +47,10 @@ def run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max, cache_dir,
                         print statements here, not a cache key)
     angle_deg         : float, default 0 -- see stitch_from_coeval's
                         module docstring for why
+    N_THREADS         : int, optional -- see coeval/fields.py; pass
+                        explicitly (e.g. config's 21cmfast.N_THREADS)
+                        rather than relying solely on OMP_NUM_THREADS
+                        being set in whatever context this runs in
 
     Returns
     -------
@@ -61,6 +65,7 @@ def run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max, cache_dir,
         z_snapshots=z_snapshots, z_arr=z_arr,
         HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
         cache_dir=cache_dir, angle_deg=angle_deg,
+        N_THREADS=N_THREADS,
     )
 
     density_1plus = 1.0 + stitched['density']
@@ -87,7 +92,7 @@ def run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max, cache_dir,
 
 
 def run_sweep(param_list, z_snapshots, z_min, z_max, cache_dir,
-              angle_deg=0.0):
+              angle_deg=0.0, N_THREADS=None):
     """
     Run run_one_config for each configuration in param_list.
 
@@ -95,7 +100,7 @@ def run_sweep(param_list, z_snapshots, z_min, z_max, cache_dir,
     ----------
     param_list  : list of (BOX_LEN, HII_DIM, tag) tuples
     z_snapshots : sequence of float, same for every configuration
-    z_min, z_max, cache_dir, angle_deg : see run_one_config
+    z_min, z_max, cache_dir, angle_deg, N_THREADS : see run_one_config
 
     Returns
     -------
@@ -107,7 +112,8 @@ def run_sweep(param_list, z_snapshots, z_min, z_max, cache_dir,
         print(f"=== {tag}: BOX_LEN={BOX_LEN} Mpc, HII_DIM={HII_DIM} "
               f"(dx={dx:.3f} Mpc) ===", flush=True)
         out[tag] = run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max,
-                                   cache_dir, tag, angle_deg=angle_deg)
+                                   cache_dir, tag, angle_deg=angle_deg,
+                                   N_THREADS=N_THREADS)
         print(f"  n_lc_pix={out[tag]['n_lc_pix']}  "
               f"D_3000={out[tag]['D3000']:.4g} uK^2", flush=True)
     return out

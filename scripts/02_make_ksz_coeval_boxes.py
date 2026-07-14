@@ -65,7 +65,7 @@ def main(config_path, force=False):
         for z in missing:
             print(f"  z={z:.1f}...", end=' ', flush=True)
             delta, xH, vx, vy, vz = run_coeval_fields(
-                z, HII_DIM, BOX_LEN, cache_dir)
+                z, HII_DIM, BOX_LEN, cache_dir, N_THREADS=sim_cfg['N_THREADS'])
             k_q, P_q, P_std = qperp_power(delta, xH, vx, vy, vz, BOX_LEN)
             k_pee, Pee_z, Pvv_z, Pev_z = measure_pee_pvv_pev(
                 delta, xH, vx, vy, vz, BOX_LEN)

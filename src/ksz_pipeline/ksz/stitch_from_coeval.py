@@ -178,7 +178,7 @@ def stitch_field(snapshot_boxes, snap_z, z_arr, z0, cell_size, ngrid,
 
 
 def stitch_lightcone_from_coeval(z_snapshots, z_arr, HII_DIM, BOX_LEN,
-                                  cache_dir, angle_deg=0.0):
+                                  cache_dir, angle_deg=0.0, N_THREADS=None):
     """
     Build a full (density, xH, velocity_z) lightcone by running/loading
     coeval boxes at z_snapshots (via the shared, validated
@@ -197,6 +197,11 @@ def stitch_lightcone_from_coeval(z_snapshots, z_arr, HII_DIM, BOX_LEN,
     cache_dir   : str, py21cmfast cache directory (reused across snapshots)
     angle_deg   : float, see module docstring -- default 0 recommended
                   for the first cross-check
+    N_THREADS   : int, optional -- passed through to run_coeval_fields.
+                  Defaults to OMP_NUM_THREADS if unset (see
+                  coeval/fields.py). Pass explicitly (e.g. from config's
+                  21cmfast.N_THREADS, matching script 01's convention)
+                  for anything beyond quick interactive testing.
 
     Returns
     -------
@@ -216,7 +221,8 @@ def stitch_lightcone_from_coeval(z_snapshots, z_arr, HII_DIM, BOX_LEN,
     snap_z = np.array(sorted(z_snapshots), dtype=float)
     delta_boxes, xH_boxes, vz_boxes = {}, {}, {}
     for z in snap_z:
-        delta, xH, _vx, _vy, vz = run_coeval_fields(z, HII_DIM, BOX_LEN, cache_dir)
+        delta, xH, _vx, _vy, vz = run_coeval_fields(
+            z, HII_DIM, BOX_LEN, cache_dir, N_THREADS=N_THREADS)
         delta_boxes[z] = delta
         xH_boxes[z]    = xH
         vz_boxes[z]    = vz

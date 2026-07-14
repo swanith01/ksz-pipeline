@@ -41,3 +41,4 @@ logs/
 configs/local.yaml
 data/products_quicktest/
 data/plots_quicktest/
+*.egg-info/

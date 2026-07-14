@@ -128,9 +128,14 @@ def main(HII_DIM, BOX_LEN, z_min, z_max, match_at_z, random_seed,
     pos_axis_ang = np.asarray(lc_ang.lightcone_distances)
     ksz_map_ang = process_common(fields_ang, red_axis_ang, pos_axis_ang, "ang")
 
-    chi_match = cosmo.comoving_distance(match_at_z).value
+    # NOTE: uses z_min here, not match_at_z -- run_angular now matches
+    # pixel size at z_min internally (like_rectilinear ties min_redshift
+    # to match_at_z, confirmed via real TypeError; see lightcone_v4.py).
+    # This computation must track whatever run_angular actually used, or
+    # it silently drifts out of sync with the real geometry.
+    chi_match = cosmo.comoving_distance(z_min).value
     pixel_scale_rad = cell_size / chi_match
-    print(f"  [check] pixel_scale_rad = cell_size/chi(match_at_z) = "
+    print(f"  [check] pixel_scale_rad = cell_size/chi(z_min) = "
           f"{cell_size:.4f}/{chi_match:.1f} = {pixel_scale_rad:.4e} rad "
           f"(computed from like_rectilinear's documented matching "
           f"behavior, not read from a LightCone attribute -- see script "

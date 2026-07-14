@@ -29,7 +29,11 @@ turning out wrong even for the well-known v3 API. Specifically confirmed:
     set explicitly and turned out to still cache sub-components anyway.
   - AngularLightconer.like_rectilinear takes simulation_options (the
     SimulationOptions sub-object, not the full InputParameters) plus
-    match_at_z.
+    match_at_z. CONFIRMED (13Jul2026, real TypeError): it internally
+    passes min_redshift=match_at_z to the underlying between_redshifts
+    call -- you cannot request an independent min_redshift alongside
+    match_at_z, they're the same knob in this API. run_angular below
+    handles this by using z_min AS match_at_z, not by fighting it.
 
 NOT yet confirmed, and the reason this module leads with a diagnostic
 check rather than assuming it's right: whether LightCone.lightcones is
@@ -325,11 +329,18 @@ def run_angular(inputs, z_min, match_at_z, z_max, cache_dir,
     """
     import py21cmfast as p21c
 
+    if match_at_z != z_min:
+        print(f"  [check] requested match_at_z={match_at_z} overridden to "
+              f"z_min={z_min}: like_rectilinear ties min_redshift to "
+              f"match_at_z internally (confirmed via a real TypeError -- "
+              f"'got multiple values for min_redshift' when both were "
+              f"passed), so this API only supports matching pixel size at "
+              f"the lightcone's own lower bound, not an independent "
+              f"reference redshift. See module docstring.")
     lightconer = p21c.AngularLightconer.like_rectilinear(
         simulation_options=inputs.simulation_options,
-        match_at_z=match_at_z,
+        match_at_z=z_min,
         max_redshift=z_max,
-        min_redshift=z_min,
         quantities=tuple(set(quantities) | set(_REQUIRED_INTERNAL_QUANTITIES)),
     )
 

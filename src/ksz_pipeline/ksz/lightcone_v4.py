@@ -44,16 +44,27 @@ import os
 import numpy as np
 
 
-def build_inputs(random_seed, HII_DIM, BOX_LEN, HII_EFF_FACTOR=None,
-                  astro_params=None, N_THREADS=1):
+def build_inputs(random_seed, HII_DIM, BOX_LEN, node_redshifts,
+                  HII_EFF_FACTOR=None, astro_params=None, N_THREADS=1):
     """
     Build one InputParameters object, shared by both the rectilinear and
     angular runs below so they're genuinely the same simulation setup.
+
+    node_redshifts is REQUIRED here, not optional -- confirmed via a real
+    run (13Jul2026), not the docstring: InputParameters.__doc__ claims
+    it defaults to a log-(1+z)-spaced grid "if evolution is required",
+    but run_lightcone raised ValueError: "You are attempting to run a
+    lightcone with no node_redshifts" when left unset. Use
+    build_node_redshifts() below for a sensible default grid, and pass
+    it explicitly.
 
     Parameters
     ----------
     random_seed : int
     HII_DIM, BOX_LEN : int, float
+    node_redshifts : array-like of float -- the redshifts at which
+        coeval-like boxes are actually computed; the lightcone
+        interpolates between these. See build_node_redshifts().
     HII_EFF_FACTOR : float, optional -- convenience for the one astro
         param this pipeline has touched elsewhere (matches
         configs/fiducial.yaml's astrophysics.HII_EFF_FACTOR); ignored if
@@ -73,6 +84,7 @@ def build_inputs(random_seed, HII_DIM, BOX_LEN, HII_EFF_FACTOR=None,
 
     kwargs = dict(
         random_seed=random_seed,
+        node_redshifts=np.asarray(node_redshifts, dtype=float),
         simulation_options=p21c.SimulationOptions(
             HII_DIM=int(HII_DIM), BOX_LEN=float(BOX_LEN), N_THREADS=int(N_THREADS)),
     )
@@ -80,6 +92,31 @@ def build_inputs(random_seed, HII_DIM, BOX_LEN, HII_EFF_FACTOR=None,
         kwargs["astro_params"] = astro_params
 
     return p21c.InputParameters(**kwargs)
+
+
+def build_node_redshifts(z_min, z_max, n_nodes=30):
+    """
+    Default node_redshifts grid: log-spaced in (1+z) between z_min and
+    z_max, matching the spacing PHILOSOPHY the InputParameters docstring
+    describes for its (non-functioning, see build_inputs' docstring)
+    auto-default -- finer steps at low z, coarser at high z, which is
+    the physically sensible choice (structure evolves faster at low z).
+
+    Parameters
+    ----------
+    z_min, z_max : float -- should match (or safely bracket) the LOS
+        redshift range the lightcone will actually be built over
+    n_nodes : int -- number of coeval-like boxes computed; more nodes
+        means finer interpolation but proportionally more py21cmfast
+        compute. 30 is a reasonable starting point, not tuned against
+        any convergence test yet -- unlike this pipeline's v3 z_snapshots
+        grid, which the dz convergence sweep (script 06) actually checked.
+
+    Returns
+    -------
+    ndarray, ascending
+    """
+    return np.logspace(np.log10(1.0 + z_min), np.log10(1.0 + z_max), n_nodes) - 1.0
 
 
 def check_lightcone_fields(lightcone, expected_fields):

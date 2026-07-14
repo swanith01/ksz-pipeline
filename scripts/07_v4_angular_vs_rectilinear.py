@@ -37,7 +37,8 @@ import argparse
 import numpy as np
 from astropy.cosmology import Planck18 as cosmo
 
-from ksz_pipeline.ksz.lightcone_v4 import build_inputs, run_rectilinear, run_angular
+from ksz_pipeline.ksz.lightcone_v4 import (build_inputs, build_node_redshifts,
+                                            run_rectilinear, run_angular)
 from ksz_pipeline.ksz.lightcone_integral import compute_ksz_map, ksz_map_to_Dl
 from ksz_pipeline.ksz.angular_lightcone import angular_ksz_map_to_Dl
 from ksz_pipeline.ksz.optical_depth import (compute_tau, compute_visibility,
@@ -92,8 +93,11 @@ def process_common(fields, red_axis, pos_axis, patchy_check_label):
 
 
 def main(HII_DIM, BOX_LEN, z_min, z_max, match_at_z, random_seed,
-         HII_EFF_FACTOR, cache_dir, n_threads):
-    inputs = build_inputs(random_seed, HII_DIM, BOX_LEN,
+         HII_EFF_FACTOR, cache_dir, n_threads, n_nodes):
+    node_redshifts = build_node_redshifts(z_min, z_max, n_nodes=n_nodes)
+    print(f"node_redshifts: {n_nodes} points, log-(1+z)-spaced, "
+          f"{node_redshifts.min():.2f} -> {node_redshifts.max():.2f}")
+    inputs = build_inputs(random_seed, HII_DIM, BOX_LEN, node_redshifts,
                            HII_EFF_FACTOR=HII_EFF_FACTOR, N_THREADS=n_threads)
     cell_size = BOX_LEN / HII_DIM
 
@@ -152,6 +156,8 @@ if __name__ == "__main__":
     parser.add_argument("--HII_EFF_FACTOR", type=float, default=30.0)
     parser.add_argument("--cache_dir", default="data/cache_v4_quicktest")
     parser.add_argument("--n_threads", type=int, default=8)
+    parser.add_argument("--n_nodes", type=int, default=30)
     args = parser.parse_args()
     main(args.HII_DIM, args.BOX_LEN, args.z_min, args.z_max, args.match_at_z,
-         args.random_seed, args.HII_EFF_FACTOR, args.cache_dir, args.n_threads)
+         args.random_seed, args.HII_EFF_FACTOR, args.cache_dir, args.n_threads,
+         args.n_nodes)

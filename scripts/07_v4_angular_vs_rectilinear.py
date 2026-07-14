@@ -72,7 +72,12 @@ def process_common(fields, red_axis, pos_axis, patchy_check_label):
     x_HII_field   = 1.0 - fields['neutral_fraction']
 
     _diagnose_velocity(fields['velocity_z'])
-    v_los_Mpc_s = fields['velocity_z'] / MPC_CM   # ASSUMES raw cm/s -- see check above
+    # CONFIRMED 13Jul2026 (real run, HII_DIM=32/BOX_LEN=100): raw velocity_z
+    # rms = 2.0955e-17, matching the ~1e-17-1e-18 Mpc/s target directly.
+    # The /MPC_CM interpretation gave 6.79e-42 -- absurd, and was the
+    # default before this fix, producing D_3000=3.637e-47. v4's velocity_z
+    # is natively Mpc/s, unlike v3's raw lowres_vz. No conversion needed.
+    v_los_Mpc_s = fields['velocity_z']
 
     x_e_interp = 1.0 - fields['neutral_fraction'].mean(axis=(0, 1))
     tau0 = analytic_tau_below(red_axis.min())

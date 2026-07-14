@@ -87,6 +87,13 @@ def build_inputs(random_seed, HII_DIM, BOX_LEN, node_redshifts,
         node_redshifts=np.asarray(node_redshifts, dtype=float),
         simulation_options=p21c.SimulationOptions(
             HII_DIM=int(HII_DIM), BOX_LEN=float(BOX_LEN), N_THREADS=int(N_THREADS)),
+        # KEEP_3D_VELOCITIES=True: confirmed required (13Jul2026, real
+        # ValueError) for angular lightcones specifically -- "To account
+        # for RSDs or velocity corrections in an angular lightcone, you
+        # need to set matter_options.KEEP_3D_VELOCITIES=True". Set here,
+        # on the SHARED inputs object, so the rectilinear run uses the
+        # identical setup too (the whole point of sharing build_inputs).
+        matter_options=p21c.MatterOptions(KEEP_3D_VELOCITIES=True),
     )
     if astro_params is not None:
         kwargs["astro_params"] = astro_params

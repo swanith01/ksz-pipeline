@@ -279,7 +279,7 @@ def run_rectilinear(inputs, z_min, z_max, cache_dir, resolution_mpc=None,
     return lightcone, fields
 
 
-def run_angular(inputs, match_at_z, z_max, cache_dir,
+def run_angular(inputs, z_min, match_at_z, z_max, cache_dir,
                  quantities=("density", "velocity_z", "neutral_fraction")):
     """
     Build and run an AngularLightconer (fixed field of view), pixel-size
@@ -287,6 +287,22 @@ def run_angular(inputs, match_at_z, z_max, cache_dir,
     comparison basis: same InputParameters, same quantities, same
     effective resolution at one reference redshift, only the geometry
     differs.
+
+    UNVERIFIED FIX (13Jul2026): a real run showed the angular patchy
+    regime stopping exactly at match_at_z (7.50, our default) instead of
+    continuing down to z_min like the rectilinear run's 4.10 -- strong
+    circumstantial evidence that without an explicit low-z bound,
+    like_rectilinear was defaulting the lightcone's minimum redshift to
+    match_at_z itself, silently truncating the whole second half of
+    reionization. Now passes min_redshift=z_min through like_rectilinear's
+    **kw (AngularLightconer.__init__ itself was never directly inspected,
+    only RectilinearLightconer's -- 'min_redshift' is the RIGHT name by
+    analogy with between_redshifts' own min_redshift/max_redshift
+    parameters, not confirmed by inspecting the angular constructor
+    directly). If this raises TypeError('unexpected keyword'), that
+    confirms the parameter name is wrong, not the underlying hypothesis --
+    check AngularLightconer.__init__'s actual signature next, the same
+    way RectilinearLightconer's was checked.
 
     Parameters
     ----------
@@ -313,6 +329,7 @@ def run_angular(inputs, match_at_z, z_max, cache_dir,
         simulation_options=inputs.simulation_options,
         match_at_z=match_at_z,
         max_redshift=z_max,
+        min_redshift=z_min,
         quantities=tuple(set(quantities) | set(_REQUIRED_INTERNAL_QUANTITIES)),
     )
 

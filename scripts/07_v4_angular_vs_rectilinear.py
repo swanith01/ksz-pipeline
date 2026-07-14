@@ -123,7 +123,7 @@ def main(HII_DIM, BOX_LEN, z_min, z_max, match_at_z, random_seed,
     print("=" * 60)
     print("ANGULAR")
     print("=" * 60)
-    lc_ang, fields_ang = run_angular(inputs, match_at_z, z_max, cache_dir)
+    lc_ang, fields_ang = run_angular(inputs, z_min, match_at_z, z_max, cache_dir)
     red_axis_ang = np.asarray(lc_ang.lightcone_redshifts)
     pos_axis_ang = np.asarray(lc_ang.lightcone_distances)
     ksz_map_ang = process_common(fields_ang, red_axis_ang, pos_axis_ang, "ang")

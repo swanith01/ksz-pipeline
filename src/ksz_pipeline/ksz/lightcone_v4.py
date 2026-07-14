@@ -1,0 +1,215 @@
+"""
+py21cmfast v4 (4.1.0) lightcone construction: rectilinear and angular,
+sharing one InputParameters build so the comparison between them is
+apples-to-apples.
+
+Built against py21cmfast 4.1.0's ACTUAL API, confirmed via inspect.signature
+probes run on the cluster (13Jul2026) -- not from documentation memory,
+given how much of this session came from exactly that kind of assumption
+turning out wrong even for the well-known v3 API. Specifically confirmed:
+
+  - RectilinearLightconer.with_equal_cdist_slices is DEPRECATED; use
+    between_redshifts(min_redshift, max_redshift, resolution, cosmo=...).
+  - LightCone has no flat .density/.velocity/.xH_box attributes (the v3
+    convention) -- fields live in .lightcones, accessed by name.
+  - LightCone.get_fields(inputs) -> tuple returns the ACTUAL field name
+    strings for a given InputParameters, without running anything.
+    Confirmed for a minimal InputParameters(random_seed=1,
+    simulation_options=SimulationOptions(HII_DIM=16, BOX_LEN=50.0)):
+        ('log10_mturn_acg', 'log10_mturn_mcg', 'density', 'velocity_z',
+         'neutral_fraction', 'ionisation_rate_G12', 'mean_free_path',
+         'z_reion', 'kinetic_temperature', 'brightness_temp',
+         'halo_sfr', 'n_ion')
+    i.e. 'neutral_fraction' not 'xH_box', 'velocity_z' not 'lowres_vz'.
+  - generate_lightcone's `regenerate` parameter DEFAULTS TO TRUE --
+    opposite of what you want for caching; must be explicitly set False
+    or every run recomputes regardless of a populated cache.
+  - CacheConfig defaults to caching everything (all fields True) -- a
+    safer default than v3's coeval/fields.py, which needed write=False
+    set explicitly and turned out to still cache sub-components anyway.
+  - AngularLightconer.like_rectilinear takes simulation_options (the
+    SimulationOptions sub-object, not the full InputParameters) plus
+    match_at_z.
+
+NOT yet confirmed, and the reason this module leads with a diagnostic
+check rather than assuming it's right: whether LightCone.lightcones is
+dict-style access (lightcone.lightcones['density']) or something else.
+get_fields() confirmed the field NAMES; it says nothing about the access
+pattern. check_lightcone_fields() below fails loudly and immediately if
+this assumption is wrong, rather than silently producing bad arrays.
+"""
+
+import os
+
+import numpy as np
+
+
+def build_inputs(random_seed, HII_DIM, BOX_LEN, HII_EFF_FACTOR=None,
+                  astro_params=None, N_THREADS=1):
+    """
+    Build one InputParameters object, shared by both the rectilinear and
+    angular runs below so they're genuinely the same simulation setup.
+
+    Parameters
+    ----------
+    random_seed : int
+    HII_DIM, BOX_LEN : int, float
+    HII_EFF_FACTOR : float, optional -- convenience for the one astro
+        param this pipeline has touched elsewhere (matches
+        configs/fiducial.yaml's astrophysics.HII_EFF_FACTOR); ignored if
+        astro_params is given instead
+    astro_params : dict, optional -- full override, takes precedence
+        over HII_EFF_FACTOR if both given
+    N_THREADS : int
+
+    Returns
+    -------
+    py21cmfast.InputParameters
+    """
+    import py21cmfast as p21c
+
+    if astro_params is None and HII_EFF_FACTOR is not None:
+        astro_params = {"HII_EFF_FACTOR": float(HII_EFF_FACTOR)}
+
+    kwargs = dict(
+        random_seed=random_seed,
+        simulation_options=p21c.SimulationOptions(
+            HII_DIM=int(HII_DIM), BOX_LEN=float(BOX_LEN), N_THREADS=int(N_THREADS)),
+    )
+    if astro_params is not None:
+        kwargs["astro_params"] = astro_params
+
+    return p21c.InputParameters(**kwargs)
+
+
+def check_lightcone_fields(lightcone, expected_fields):
+    """
+    Fail loudly, immediately, with a clear message, if `lightcone.lightcones`
+    isn't the dict-style access this module assumes -- rather than let a
+    wrong assumption propagate into silently-wrong D_ell downstream. See
+    module docstring: this is the one thing NOT confirmed via the API
+    probes, only inferred.
+
+    Returns
+    -------
+    dict : field_name -> ndarray, exactly as found on lightcone.lightcones
+    """
+    lc_fields = lightcone.lightcones
+    if not hasattr(lc_fields, "__getitem__") or not hasattr(lc_fields, "keys"):
+        raise TypeError(
+            f"lightcone.lightcones is a {type(lc_fields)}, not dict-like as "
+            f"assumed. Run `print(type(lightcone.lightcones)); "
+            f"print(dir(lightcone.lightcones))` and send the output -- "
+            f"this module's field access needs updating, not the physics."
+        )
+    missing = [f for f in expected_fields if f not in lc_fields.keys()]
+    if missing:
+        raise KeyError(
+            f"Expected fields {missing} not found in lightcone.lightcones "
+            f"(has: {list(lc_fields.keys())}). Check the `quantities=` "
+            f"passed to the Lightconer matches what you're trying to read."
+        )
+    print(f"  [check] lightcone.lightcones is dict-like with keys: "
+          f"{list(lc_fields.keys())}")
+    for f in expected_fields:
+        arr = lc_fields[f]
+        print(f"  [check] '{f}': shape={arr.shape} dtype={arr.dtype} "
+              f"mean={np.mean(arr):.4e} rms={np.sqrt(np.mean(arr**2)):.4e}")
+    return {f: lc_fields[f] for f in expected_fields}
+
+
+def run_rectilinear(inputs, z_min, z_max, cache_dir, resolution_mpc=None,
+                     quantities=("density", "velocity_z", "neutral_fraction")):
+    """
+    Build and run a RectilinearLightconer (fixed comoving transverse grid
+    -- the v4 equivalent of what 01_make_ksz_lightcone_maps.py does in
+    v3, but via the proper v4 Lightconer API, not skewed_los.py-style
+    extraction).
+
+    Parameters
+    ----------
+    inputs         : InputParameters, from build_inputs()
+    z_min, z_max   : float
+    cache_dir      : str
+    resolution_mpc : float, optional -- comoving Mpc per LOS slice;
+                     defaults to the box's own cell size
+                     (BOX_LEN/HII_DIM), matching this pipeline's existing
+                     dx convention
+    quantities     : tuple of str, field names -- must be valid per
+                     LightCone.get_fields(inputs); check that first if
+                     unsure
+
+    Returns
+    -------
+    lightcone : py21cmfast.LightCone
+    fields    : dict, from check_lightcone_fields()
+    """
+    import py21cmfast as p21c
+    import astropy.units as u
+
+    if resolution_mpc is None:
+        resolution_mpc = inputs.simulation_options.BOX_LEN / inputs.simulation_options.HII_DIM
+
+    lightconer = p21c.RectilinearLightconer.between_redshifts(
+        min_redshift=z_min, max_redshift=z_max,
+        resolution=resolution_mpc * u.Mpc,
+        quantities=quantities,
+    )
+
+    os.makedirs(cache_dir, exist_ok=True)
+    lightcone = p21c.run_lightcone(
+        lightconer=lightconer, inputs=inputs,
+        cache=p21c.OutputCache(direc=cache_dir),
+        regenerate=False,  # default is True -- would ignore the cache entirely
+        progressbar=False,
+    )
+    fields = check_lightcone_fields(lightcone, quantities)
+    return lightcone, fields
+
+
+def run_angular(inputs, match_at_z, z_max, cache_dir,
+                 quantities=("density", "velocity_z", "neutral_fraction")):
+    """
+    Build and run an AngularLightconer (fixed field of view), pixel-size
+    matched to a rectilinear lightconer at match_at_z -- the actual
+    comparison basis: same InputParameters, same quantities, same
+    effective resolution at one reference redshift, only the geometry
+    differs.
+
+    Parameters
+    ----------
+    inputs      : InputParameters, SAME object passed to run_rectilinear
+                  for a genuine apples-to-apples comparison
+    match_at_z  : float, redshift at which pixel sizes are matched
+                  between the two lightconer types (pick something near
+                  the middle of the patchy kSZ weight, e.g. z~7-8)
+    z_max       : float
+    cache_dir   : str, can be the SAME dir as the rectilinear run --
+                  py21cmfast's own caching keys off simulation parameters,
+                  not lightconer type, so the underlying coeval-like
+                  boxes are shared/reused between the two runs
+    quantities  : tuple of str
+
+    Returns
+    -------
+    lightcone : py21cmfast.LightCone
+    fields    : dict, from check_lightcone_fields()
+    """
+    import py21cmfast as p21c
+
+    lightconer = p21c.AngularLightconer.like_rectilinear(
+        simulation_options=inputs.simulation_options,
+        match_at_z=match_at_z,
+        max_redshift=z_max,
+        quantities=quantities,
+    )
+
+    os.makedirs(cache_dir, exist_ok=True)
+    lightcone = p21c.run_lightcone(
+        lightconer=lightconer, inputs=inputs,
+        cache=p21c.OutputCache(direc=cache_dir),
+        regenerate=False,
+        progressbar=False,
+    )
+    fields = check_lightcone_fields(lightcone, quantities)
+    return lightcone, fields

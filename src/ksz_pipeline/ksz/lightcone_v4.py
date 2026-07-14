@@ -134,6 +134,16 @@ def build_node_redshifts(z_min, z_max, n_nodes=30, margin=0.5):
                         np.log10(1.0 + z_max + margin), n_nodes) - 1.0
 
 
+# py21cmfast's own internal lightcone driver (_run_lightcone_from_perturbed_fields)
+# unconditionally reads lightcone.lightcones["brightness_temp"], regardless of
+# what quantities the caller asked for -- confirmed via a real KeyError
+# (13Jul2026) when it was left out of quantities=. RectilinearLightconer's
+# own __init__ default, quantities=('brightness_temp',), was the hint this
+# is effectively mandatory, not just an example default. Always requested
+# from the Lightconer below even if the caller doesn't want it back.
+_REQUIRED_INTERNAL_QUANTITIES = ("brightness_temp",)
+
+
 def check_lightcone_fields(lightcone, expected_fields):
     """
     Fail loudly, immediately, with a clear message, if `lightcone.lightcones`
@@ -205,7 +215,7 @@ def run_rectilinear(inputs, z_min, z_max, cache_dir, resolution_mpc=None,
     lightconer = p21c.RectilinearLightconer.between_redshifts(
         min_redshift=z_min, max_redshift=z_max,
         resolution=resolution_mpc * u.Mpc,
-        quantities=quantities,
+        quantities=tuple(set(quantities) | set(_REQUIRED_INTERNAL_QUANTITIES)),
     )
 
     os.makedirs(cache_dir, exist_ok=True)
@@ -253,7 +263,7 @@ def run_angular(inputs, match_at_z, z_max, cache_dir,
         simulation_options=inputs.simulation_options,
         match_at_z=match_at_z,
         max_redshift=z_max,
-        quantities=quantities,
+        quantities=tuple(set(quantities) | set(_REQUIRED_INTERNAL_QUANTITIES)),
     )
 
     os.makedirs(cache_dir, exist_ok=True)

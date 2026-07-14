@@ -94,29 +94,44 @@ def build_inputs(random_seed, HII_DIM, BOX_LEN, node_redshifts,
     return p21c.InputParameters(**kwargs)
 
 
-def build_node_redshifts(z_min, z_max, n_nodes=30):
+def build_node_redshifts(z_min, z_max, n_nodes=30, margin=0.5):
     """
-    Default node_redshifts grid: log-spaced in (1+z) between z_min and
-    z_max, matching the spacing PHILOSOPHY the InputParameters docstring
-    describes for its (non-functioning, see build_inputs' docstring)
-    auto-default -- finer steps at low z, coarser at high z, which is
-    the physically sensible choice (structure evolves faster at low z).
+    Default node_redshifts grid: log-spaced in (1+z) between
+    z_min-margin and z_max+margin, matching the spacing PHILOSOPHY the
+    InputParameters docstring describes for its (non-functioning, see
+    build_inputs' docstring) auto-default -- finer steps at low z,
+    coarser at high z, which is the physically sensible choice
+    (structure evolves faster at low z).
+
+    margin exists because of a second real error (13Jul2026):
+    RectilinearLightconer.between_redshifts(min_redshift=z_min,
+    max_redshift=z_max, ...) does NOT produce a lightcone whose actual
+    redshift range exactly equals [z_min, z_max] -- fixed-comoving-
+    distance stepping means the last slice can overshoot max_redshift.
+    Confirmed concretely at HII_DIM=32/BOX_LEN=100 (cell_size=3.125 Mpc):
+    requested [4.0, 20.0], actual lightcone range came out
+    [4.000000000136674, 20.00103882804506] -- node_redshifts must fully
+    CONTAIN the lightcone's actual range or run_lightcone raises
+    ValueError. The overshoot's exact size depends on resolution/cell_size,
+    not yet checked at fiducial (800Mpc/128^3) scale -- margin=0.5 is a
+    generous, not precisely-derived, safety buffer.
 
     Parameters
     ----------
-    z_min, z_max : float -- should match (or safely bracket) the LOS
-        redshift range the lightcone will actually be built over
+    z_min, z_max : float -- the LOS redshift range you actually want
     n_nodes : int -- number of coeval-like boxes computed; more nodes
         means finer interpolation but proportionally more py21cmfast
         compute. 30 is a reasonable starting point, not tuned against
         any convergence test yet -- unlike this pipeline's v3 z_snapshots
         grid, which the dz convergence sweep (script 06) actually checked.
+    margin : float -- extra redshift range on both ends, see above
 
     Returns
     -------
     ndarray, ascending
     """
-    return np.logspace(np.log10(1.0 + z_min), np.log10(1.0 + z_max), n_nodes) - 1.0
+    return np.logspace(np.log10(1.0 + z_min - margin),
+                        np.log10(1.0 + z_max + margin), n_nodes) - 1.0
 
 
 def check_lightcone_fields(lightcone, expected_fields):

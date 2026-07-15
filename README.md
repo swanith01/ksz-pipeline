@@ -1,30 +1,81 @@
 # ksz-pipeline
 
 Kinetic Sunyaev–Zel'dovich (kSZ) power spectrum pipeline built on 21cmFAST.
+Computes the kSZ angular power spectrum from reionization simulations via
+two independent methods, for cross-validation.
 
-This repository contains the full numerical pipeline used to compute the kSZ angular power
-spectrum via two complementary approaches — an evolving lightcone line-of-sight integration
-and a coeval-box Limber projection — together with convergence studies, patchy optical-depth
-screening tests, and reionisation-history parameter scans.
-
-This pipeline forms the methodological foundation of the kSZ–LAE cross-correlation paper.
+This pipeline is the methodological foundation of the kSZ–LAE
+cross-correlation paper.
 
 ---
 
-## Scientific background
+## Start here: what's trusted right now
 
-The kSZ temperature fluctuation is computed from the electron momentum field during
-the Epoch of Reionization (EoR). Two methods are implemented and compared:
+**Use these two methods.** Both are validated against Reichardt et al.
+(2021)'s D_pkSZ = 1.1 (+1.0/−0.7) μK² data point at full resolution:
 
-1. **Lightcone (LOS integral):** Direct integration of the electron momentum field along
-   skewed lines of sight through the evolving 21cmFAST lightcone.
-2. **Coeval boxes (Limber projection):** Transverse momentum power spectrum computed
-   from snapshot cubes and projected via the Limber approximation.
+| Method | Script | Status |
+|---|---|---|
+| Coeval boxes (direct + Georgiev) | `scripts/02_make_ksz_coeval_boxes.py` | ✅ Trusted |
+| Stitched lightcone | `scripts/03_stitched_lightcone_crosscheck.py` | ✅ Trusted |
 
-Additional modules cover:
-- Box-size and resolution convergence of both methods.
-- Patchy vs global optical-depth screening comparison.
-- kSZ signal dependence on reionisation history (`HII_EFF_FACTOR` scans).
+**Don't use these right now:**
+
+| Method | Script | Status |
+|---|---|---|
+| Native lightcone | `scripts/01_make_ksz_lightcone_maps.py` | ❌ Deprecated — unresolved D_ℓ excess |
+| Angular lightcone (py21cmfast v4) | `scripts/07_v4_angular_vs_rectilinear.py` | ⏸️ Set aside — see Open Items |
+
+If you're picking this repo up fresh, run `02` and `03` and nothing else
+until you've read the "Open Items" section below.
+
+---
+
+## Setup
+
+```bash
+git clone https://github.com/swanith01/ksz-pipeline.git
+cd ksz-pipeline
+conda env create -f environment.yml   # or use an existing env with py21cmfast 3.x
+conda activate ksz-pipeline           # name may vary -- see below
+pip install -e . --no-deps
+```
+
+`--no-deps` is deliberate: this avoids pip pulling different numpy/scipy/
+astropy versions than whatever your py21cmfast install was built against.
+
+**On the TIFR cluster (swarm / pride):** conda doesn't auto-activate in
+fresh shells — run `source ~/miniconda3/etc/profile.d/conda.sh` first.
+The working env for scripts 01–06 is `p21c_v3` (py21cmfast 3.3.1). Script
+07 (angular, v4) needs a separate v4 env (`p21c_v41` / `PF21c_v41`,
+py21cmfast 4.1.0) — install `ksz_pipeline` there separately too, editable
+installs are per-environment.
+
+---
+
+## Running it
+
+**Quick, small-scale sanity check** (minutes, not hours — do this first
+on anything new):
+```bash
+python scripts/02_make_ksz_coeval_boxes.py --config configs/quicktest.yaml
+python scripts/03_stitched_lightcone_crosscheck.py --config configs/quicktest.yaml
+```
+
+**Real (fiducial) run** — 800 Mpc, HII_DIM_coeval=512, real compute, use
+the cluster:
+```bash
+qsub jobs/run_fiducial_coeval.pbs
+qsub jobs/run_fiducial_stitched.pbs
+```
+Check `jobs/*.pbs` for the resource/queue conventions before writing new
+ones — mirror them rather than guessing at PBS syntax.
+
+**Never run either of the above directly on a login node** — always via
+`qsub` (batch) or `qsub -I` (interactive).
+
+Results land in `data/products/*.npz`. Plot them with
+`notebooks/exploratory/three_way_comparison.ipynb`.
 
 ---
 
@@ -32,125 +83,68 @@ Additional modules cover:
 
 ```
 ksz-pipeline/
-  README.md              # this file
-  LICENSE
-  CITATION.cff
-  environment.yml        # conda environment (recommended)
-  pyproject.toml         # pip-installable package definition
-  .gitignore
-
-  data/
-    README.md            # where the simulation data live (no large files committed)
-
   configs/
-    fiducial.yaml        # fiducial 21cmFAST parameter set
-    variants/            # one yaml per parameter-scan variant
-
-  src/
-    ksz_pipeline/
-      ksz/               # lightcone LOS integral (kSZ maps)
-      coeval/            # coeval-box Limber projection
-      convergence/       # box-size and resolution convergence utilities
-      patchy/            # patchy optical-depth screening
-      reion_history/     # reionisation-history parameter scans
-      io/                # loading 21cmFAST outputs, saving results
-      plotting/          # all plot functions (no science logic here)
-      utils/             # physical constants, cosmology helpers
-
+    fiducial.yaml      # 800 Mpc, HII_DIM_coeval=512, z=4-20
+    quicktest.yaml      # 100 Mpc, HII_DIM=32 -- fast iteration
+  data/
+    cache/               # py21cmfast's own box cache (gitignored)
+    products/             # final .npz/.npy results
+    plots/
+  src/ksz_pipeline/
+    coeval/                # box generation, momentum/power spectra,
+                            # Limber projection, Georgiev reconstruction
+    ksz/                     # optical depth/visibility, map building,
+                              # stitched-lightcone construction, v4 angular
+    convergence/                # box-size / resolution / dz sweeps
+    plotting/                     # shared matplotlib styles
+    utils/                          # physical constants
   scripts/
-    01_make_ksz_lightcone_maps.py
-    02_make_ksz_coeval_boxes.py
-    03_convergence_boxsize.py
-    04_convergence_resolution.py
-    05_patchy_screening.py
-    06_reion_history_scan.py
-    07_make_all_figures.py
-
-  notebooks/
-    exploratory/         # scratch notebooks only — no final results here
-
-  paper/
-    figure_scripts/      # one script per paper figure, standalone and reproducible
-
-  jobs/
-    lightcone_ksz.pbs    # PBS job script for lightcone runs
-    coeval_ksz.pbs       # PBS job script for coeval-box runs
-    array_scan.pbs       # PBS array job for parameter scans
-
-  tests/
-    test_constants.py
-    test_ksz_lightcone.py
-    test_limber.py
+    01_make_ksz_lightcone_maps.py       # deprecated, see above
+    02_make_ksz_coeval_boxes.py           # trusted
+    03_stitched_lightcone_crosscheck.py     # trusted
+    04-06_convergence_*.py                    # convergence sweeps
+    07_v4_angular_vs_rectilinear.py             # set aside, see above
+  jobs/            # working PBS templates -- mirror these
+  notebooks/exploratory/    # plotting notebooks, no science logic
 ```
 
 ---
 
-## Getting started
+## Open items
 
-### 1. Clone the repository
-```bash
-git clone https://github.com/swanith01/ksz-pipeline.git
-cd ksz-pipeline
-```
+Things that are genuinely unresolved right now, not history:
 
-### 2. Set up the environment
-```bash
-conda env create -f environment.yml
-conda activate ksz-pipeline
-pip install -e .
-```
+- **Stitched vs. coeval-direct D_3000 disagree by roughly 2×.** Both
+  individually land near Reichardt's value, but they don't yet agree
+  with each other — this is the current top priority. Check whether the
+  ratio is flat across ℓ (normalization-type issue) or varies with ℓ
+  (shape/geometric issue).
+- **The Georgiev reconstruction overshoots the direct measurement by
+  roughly 3× at every redshift, confirmed at full resolution** (512³,
+  not just small test boxes). This needs a real look at the Eq.10
+  convolution normalization, not more resolution.
+- **Angular lightcone (script 07)** works technically but was set aside
+  per project guidance — it also runs on a different py21cmfast major
+  version (4.x vs 3.x used everywhere else), which complicates comparing
+  it directly to the trusted methods.
+- **Native lightcone (script 01)** has a large, unexplained D_ℓ excess.
+  Root cause was never found; the stitched-lightcone method exists
+  specifically to sidestep it. Not planned to be revisited unless
+  something changes.
+- **`patchy/`, `reion_history/`, `io/` modules** referenced in earlier
+  planning don't exist yet. Patchy optical-depth screening and the
+  reionization-history (`HII_EFF_FACTOR`) parameter scan are not yet
+  ported into this repo.
+- **Box-size/resolution convergence sweeps** (`scripts/04`, `05`) are
+  built and pass quicktest-scale checks, but haven't been run at
+  fiducial scale yet.
+- **`data/products/` is currently tracked in git.** Binary result files
+  in version control is worth reconsidering as this grows.
 
-### 3. Point to your data
-Edit `data/README.md` to record where your 21cmFAST lightcone and coeval outputs live
-on your local machine or HPC. Then update `configs/fiducial.yaml` with those paths.
-
-### 4. Run the pipeline
-```bash
-# Lightcone kSZ maps
-python scripts/01_make_ksz_lightcone_maps.py --config configs/fiducial.yaml
-
-# Coeval-box Limber projection
-python scripts/02_make_ksz_coeval_boxes.py --config configs/fiducial.yaml
-
-# Convergence tests
-python scripts/03_convergence_boxsize.py --config configs/fiducial.yaml
-python scripts/04_convergence_resolution.py --config configs/fiducial.yaml
-
-# Reproduce all paper figures
-python scripts/07_make_all_figures.py --config configs/fiducial.yaml
-```
-
----
-
-## Code origin and migration
-
-This codebase was migrated and reorganised from:
-- `Swanith_DP2_GitBranch` (commits up to `82208d7` / `526b1d7`)
-- `Semester-6-Plots`
-
-The old repositories are archived. This is the canonical repository going forward.
-
----
-
-## Versioning
-
-| Tag | Meaning |
-|---|---|
-| `v0.1` | First full end-to-end pipeline working |
-| `submitted-v1` | Code state at journal submission |
-| `accepted-v1` | Code state at acceptance |
-
-At submission, this repository will be archived on Zenodo.
-
----
-
-## Dependencies
-
-- Python ≥ 3.10
-- 21cmFAST v3 (tested on v3.3.1 / v3.4.0)
-- numpy, scipy, matplotlib, astropy, pyyaml, h5py
-
-See `environment.yml` for the full pinned environment.
+For anything not covered here, check `git log` before assuming something
+is broken — a lot of subtle unit/convention issues in the coeval and
+lightcone construction code have already been found and fixed; commit
+messages describe what and why.
 
 ---
 

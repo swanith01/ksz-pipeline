@@ -101,7 +101,7 @@ def run_dz_sweep_coeval(z_fine, dz_multiples, BOX_LEN, HII_DIM, cache_dir,
 
 
 def run_dz_sweep_stitched(z_fine, dz_multiples, BOX_LEN, HII_DIM, z_min, z_max,
-                           cache_dir, angle_deg=0.0):
+                           cache_dir, angle_deg=0.0, N_THREADS=None):
     """
     Stitched-lightcone D_ell at multiple SNAPSHOT-sampling densities
     (how many coeval boxes get interpolated between), at fixed
@@ -142,6 +142,7 @@ def run_dz_sweep_stitched(z_fine, dz_multiples, BOX_LEN, HII_DIM, z_min, z_max,
               flush=True)
         results[label] = run_one_config(BOX_LEN, HII_DIM, subsets[m],
                                          z_min, z_max, cache_dir, label,
-                                         angle_deg=angle_deg)
+                                         angle_deg=angle_deg,
+                                         N_THREADS=N_THREADS)
         print(f"    D_3000={results[label]['D3000']:.4g} uK^2", flush=True)
     return results

@@ -34,7 +34,13 @@ def main(config_path, force=False):
 
     BOX_LEN = sim_cfg['BOX_LEN']
     HII_DIM = sim_cfg['HII_DIM_coeval']
-    cache_dir = os.path.join(cfg['data']['cache_dir'], "convergence_dz_coeval")
+    # BOX_LEN/HII_DIM here come straight from sim_cfg (fiducial.yaml by
+    # default), and dz_x1 (the finest grid) is ALL of z_fine -- i.e. the
+    # exact same 29 redshifts as the already-completed fiducial run.
+    # Reuse that cache directly rather than regenerating; the sweep's
+    # coarser dz variants are subsets (see dz_sweep.py's own docstring),
+    # so this reuse benefits every dz variant, not just dz_x1.
+    cache_dir = cfg['data']['cache_dir']
     out_dir   = cfg['data']['output_dir'].rstrip('/')
     plot_dir  = cfg['data']['plot_dir'].rstrip('/')
     os.makedirs(out_dir, exist_ok=True)

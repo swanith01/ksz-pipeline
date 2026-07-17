@@ -85,7 +85,8 @@ def main(config_path):
 
     for z in zs_sorted:
         delta, xH, vx, vy, vz = run_coeval_fields(
-            z, HII_DIM, BOX_LEN, cache_dir, N_THREADS=sim_cfg['N_THREADS'])
+            z, HII_DIM, BOX_LEN, cache_dir, N_THREADS=sim_cfg['N_THREADS'],
+            random_seed=sim_cfg['random_seed'])
         delta_mean.append(float(delta.mean()));  delta_rms.append(float(np.sqrt(np.mean(delta**2))))
         xH_mean_arr.append(float(xH.mean()));    xH_rms_arr.append(float(np.sqrt(np.mean(xH**2))))
         vz_mean.append(float(vz.mean()));        vz_rms.append(float(np.sqrt(np.mean(vz**2))))
@@ -110,6 +111,7 @@ def main(config_path):
         HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
         cache_dir=cache_dir, angle_deg=0.0,
         N_THREADS=sim_cfg['N_THREADS'],
+        random_seed=sim_cfg['random_seed'],
     )
     density_1plus = 1.0 + stitched['density']
     x_HII_field   = 1.0 - stitched['xH_box']

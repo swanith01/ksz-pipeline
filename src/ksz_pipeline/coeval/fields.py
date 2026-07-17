@@ -30,7 +30,7 @@ import py21cmfast as p21c
 from .velocity import velocity_conversion_factor
 
 
-def run_coeval_fields(z, HII_DIM, BOX_LEN, cache_dir, N_THREADS=None):
+def run_coeval_fields(z, HII_DIM, BOX_LEN, cache_dir, N_THREADS=None, random_seed=None):
     """
     Run (or load from py21cmfast's own cache) a coeval box at redshift z
     and return its density, neutral fraction, and velocity fields.
@@ -57,6 +57,7 @@ def run_coeval_fields(z, HII_DIM, BOX_LEN, cache_dir, N_THREADS=None):
         redshift    = float(z),
         user_params = {"HII_DIM": int(HII_DIM), "BOX_LEN": float(BOX_LEN),
                         "N_THREADS": int(N_THREADS)},
+        random_seed = random_seed,
         write       = False,
         direc       = cache_dir,
     )

@@ -178,7 +178,8 @@ def stitch_field(snapshot_boxes, snap_z, z_arr, z0, cell_size, ngrid,
 
 
 def stitch_lightcone_from_coeval(z_snapshots, z_arr, HII_DIM, BOX_LEN,
-                                  cache_dir, angle_deg=0.0, N_THREADS=None):
+                                  cache_dir, angle_deg=0.0, N_THREADS=None,
+                                  random_seed=None):
     """
     Build a full (density, xH, velocity_z) lightcone by running/loading
     coeval boxes at z_snapshots (via the shared, validated
@@ -222,7 +223,8 @@ def stitch_lightcone_from_coeval(z_snapshots, z_arr, HII_DIM, BOX_LEN,
     delta_boxes, xH_boxes, vz_boxes = {}, {}, {}
     for z in snap_z:
         delta, xH, _vx, _vy, vz = run_coeval_fields(
-            z, HII_DIM, BOX_LEN, cache_dir, N_THREADS=N_THREADS)
+            z, HII_DIM, BOX_LEN, cache_dir, N_THREADS=N_THREADS,
+            random_seed=random_seed)
         delta_boxes[z] = delta
         xH_boxes[z]    = xH
         vz_boxes[z]    = vz

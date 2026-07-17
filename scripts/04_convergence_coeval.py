@@ -55,7 +55,8 @@ def main(config_path, sweep, force=False):
         print(f"  {tag}: BOX_LEN={L} Mpc, HII_DIM={N}, dx={L/N:.3f} Mpc")
 
     results = run_sweep(param_list, z_snapshots, cache_dir, force=force,
-                         N_THREADS=sim_cfg['N_THREADS'])
+                         N_THREADS=sim_cfg['N_THREADS'],
+                         random_seed=sim_cfg['random_seed'])
 
     # -- summary table --
     print(f"\n{'tag':<16} {'D3000_direct':>14} {'D3000_georgiev':>16}")

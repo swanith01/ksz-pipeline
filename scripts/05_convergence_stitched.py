@@ -46,7 +46,8 @@ def main(config_path, sweep, angle_deg=0.0):
         print(f"  {tag}: BOX_LEN={L} Mpc, HII_DIM={N}, dx={L/N:.3f} Mpc")
 
     results = run_sweep(param_list, z_snapshots, z_min, z_max, cache_dir,
-                         angle_deg=angle_deg, N_THREADS=sim_cfg['N_THREADS'])
+                         angle_deg=angle_deg, N_THREADS=sim_cfg['N_THREADS'],
+                         random_seed=sim_cfg['random_seed'])
 
     print(f"\n{'tag':<16} {'n_lc_pix':>10} {'D3000':>12}")
     print("-" * 40)

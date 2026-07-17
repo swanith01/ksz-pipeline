@@ -51,7 +51,8 @@ def main(config_path, force=False):
 
     results = run_dz_sweep_coeval(z_fine, dz_multiples, BOX_LEN, HII_DIM,
                                    cache_dir, tag="dz_fiducial", force=force,
-                                   N_THREADS=sim_cfg['N_THREADS'])
+                                   N_THREADS=sim_cfg['N_THREADS'],
+                                   random_seed=sim_cfg['random_seed'])
 
     print(f"\n{'dz label':<10} {'n_z':>6} {'D3000_direct':>14} {'D3000_georgiev':>16}")
     print("-" * 48)

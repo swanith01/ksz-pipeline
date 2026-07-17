@@ -57,7 +57,8 @@ def main(config_path, angles):
         print(f"=== angle_deg={angle} ===", flush=True)
         r = run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max,
                             cache_dir, tag, angle_deg=float(angle),
-                            N_THREADS=sim_cfg['N_THREADS'])
+                            N_THREADS=sim_cfg['N_THREADS'],
+                            random_seed=sim_cfg['random_seed'])
         results[angle] = r
         print(f"  D_3000={r['D3000']:.4g} uK^2  ksz_map_rms={r['ksz_map_rms']:.4e}", flush=True)
 

@@ -65,7 +65,8 @@ def main(config_path, force=False):
         for z in missing:
             print(f"  z={z:.1f}...", end=' ', flush=True)
             delta, xH, vx, vy, vz = run_coeval_fields(
-                z, HII_DIM, BOX_LEN, cache_dir, N_THREADS=sim_cfg['N_THREADS'])
+                z, HII_DIM, BOX_LEN, cache_dir, N_THREADS=sim_cfg['N_THREADS'],
+                random_seed=sim_cfg['random_seed'])
             k_par, P_par, P_par_std = qparallel_power(delta, xH, vx, vy, vz, BOX_LEN)
             # NOTE: key is 'Pqperp' (not 'Pqpar') deliberately -- compute_cell
             # reads entry['Pqperp'] internally, and reusing that exact key

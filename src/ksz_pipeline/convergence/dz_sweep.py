@@ -46,7 +46,7 @@ def build_dz_subsets(z_fine, dz_multiples):
 
 
 def run_dz_sweep_coeval(z_fine, dz_multiples, BOX_LEN, HII_DIM, cache_dir,
-                         tag, force=False, N_THREADS=None):
+                         tag, force=False, N_THREADS=None, random_seed=None):
     """
     Coeval Cain+Georgiev D_ell at multiple redshift-sampling densities,
     all subsets of z_fine, at FIXED (BOX_LEN, HII_DIM) -- isolates dz
@@ -84,7 +84,7 @@ def run_dz_sweep_coeval(z_fine, dz_multiples, BOX_LEN, HII_DIM, cache_dir,
     print(f"  Populating fine-grid cache (dz_x{finest_m}, "
           f"{len(subsets[finest_m])} redshifts)...", flush=True)
     _ = run_one_config(BOX_LEN, HII_DIM, subsets[finest_m], cache_dir, tag,
-                        force=force, N_THREADS=N_THREADS)
+                        force=force, N_THREADS=N_THREADS, random_seed=random_seed)
 
     results = {}
     for m in sorted(dz_multiples):
@@ -94,14 +94,14 @@ def run_dz_sweep_coeval(z_fine, dz_multiples, BOX_LEN, HII_DIM, cache_dir,
               flush=True)
         results[label] = run_one_config(BOX_LEN, HII_DIM, subsets[m],
                                          cache_dir, tag, force=False,
-                                         N_THREADS=N_THREADS)
+                                         N_THREADS=N_THREADS, random_seed=random_seed)
         print(f"    D_3000 direct={results[label]['D3000_direct']:.4g} uK^2  "
               f"georgiev={results[label]['D3000_georgiev']:.4g} uK^2", flush=True)
     return results
 
 
 def run_dz_sweep_stitched(z_fine, dz_multiples, BOX_LEN, HII_DIM, z_min, z_max,
-                           cache_dir, angle_deg=0.0, N_THREADS=None):
+                           cache_dir, angle_deg=0.0, N_THREADS=None, random_seed=None):
     """
     Stitched-lightcone D_ell at multiple SNAPSHOT-sampling densities
     (how many coeval boxes get interpolated between), at fixed
@@ -143,6 +143,6 @@ def run_dz_sweep_stitched(z_fine, dz_multiples, BOX_LEN, HII_DIM, z_min, z_max,
         results[label] = run_one_config(BOX_LEN, HII_DIM, subsets[m],
                                          z_min, z_max, cache_dir, label,
                                          angle_deg=angle_deg,
-                                         N_THREADS=N_THREADS)
+                                         N_THREADS=N_THREADS, random_seed=random_seed)
         print(f"    D_3000={results[label]['D3000']:.4g} uK^2", flush=True)
     return results

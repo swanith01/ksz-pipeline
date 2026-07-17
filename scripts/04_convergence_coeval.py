@@ -34,7 +34,16 @@ def main(config_path, sweep, force=False):
     conv_cfg   = cfg['convergence']
     z_snapshots = cfg['coeval_ksz']['z_snapshots']
     sim_cfg    = cfg['21cmfast']
-    cache_dir  = os.path.join(cfg['data']['cache_dir'], f"convergence_{sweep}_coeval")
+    if sweep == "resolution":
+        # ref_box_len (800 Mpc) and the largest hii_dims entry (512) match
+        # the fiducial run's own BOX_LEN/HII_DIM_coeval exactly -- that
+        # point IS the already-completed fiducial run. Point at the SAME
+        # cache dir so it's read from disk, not regenerated. py21cmfast's
+        # cache is keyed by parameter hash, so the sweep's other HII_DIM
+        # configs just add new files here safely -- no collision.
+        cache_dir = cfg['data']['cache_dir']
+    else:
+        cache_dir = os.path.join(cfg['data']['cache_dir'], f"convergence_{sweep}_coeval")
     out_dir    = cfg['data']['output_dir'].rstrip('/')
     plot_dir   = cfg['data']['plot_dir'].rstrip('/')
     os.makedirs(out_dir, exist_ok=True)

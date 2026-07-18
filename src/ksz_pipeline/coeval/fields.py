@@ -58,7 +58,12 @@ def run_coeval_fields(z, HII_DIM, BOX_LEN, cache_dir, N_THREADS=None, random_see
         user_params = {"HII_DIM": int(HII_DIM), "BOX_LEN": float(BOX_LEN),
                         "N_THREADS": int(N_THREADS)},
         random_seed = random_seed,
-        write       = False,
+        write       = True,   # FIXED 18Jul2026: was False, silently disabling
+                                # all persistent caching -- every call, across
+                                # every script, regenerated boxes from scratch
+                                # regardless of matching params/seed. Confirmed
+                                # against py21cmfast's own docs. Does not affect
+                                # correctness of any existing result, only speed.
         direc       = cache_dir,
     )
     fac   = velocity_conversion_factor(z)

@@ -1,0 +1,16 @@
+{
+  "commit": "83c88e9f20da71b2e4e0840909ec82872802ab20",
+  "config_path": "/user1/swanith/ksz-pipeline/configs/fiducial.yaml",
+  "HII_DIM": 512,
+  "BOX_LEN": 800.0,
+  "z_min": 4.0,
+  "z_max": 20.0,
+  "mean_density_1plus": 0.9998956322669983,
+  "rms_v_los_Mpc_s": 4.320999200484598e-18,
+  "ksz_map_mean": 7.742311007150064e-09,
+  "ksz_map_rms": 1.409475085118018e-06,
+  "patchy_z_min": 4.23658453607046,
+  "patchy_z_max": 19.444279272883627,
+  "n_patchy_slices": 2100,
+  "n_total_slices": 2320
+}

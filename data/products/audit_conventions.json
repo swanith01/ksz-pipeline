@@ -1,0 +1,28 @@
+{
+  "scale_factor": {
+    "coeval_direct": "a_i = 1/(1+z), weight uses a_i^4 in denominator (limber.py compute_cell)",
+    "stitched": "a = 1/(1+red_axis), a_squared used as a2_mid (lightcone_integral.py compute_ksz_map)",
+    "note": "same functional form; NOT yet numerically cross-checked for equivalent net power of (1+z)"
+  },
+  "dchi_discretization": {
+    "coeval_direct": "np.gradient over 29 irregular z_snapshots (astropy Planck18 comoving_distance)",
+    "stitched": "np.diff over 2320 UNIFORM comoving-distance LOS pixels (build_los_z_grid)",
+    "note": "fundamentally different grids -- checkpoint approach compares CUMULATIVE sums at matched z"
+  },
+  "speed_of_light": {
+    "coeval_direct": "C_CGS (constants.py)",
+    "stitched": "C_CGS (constants.py)",
+    "note": "identical shared constant"
+  },
+  "velocity_convention": {
+    "coeval_direct": "cm/s, enters momentum field q=w*v, squared in P_qperp",
+    "stitched": "cm/s -> Mpc/s, enters LINEARLY in the real-space temperature integrand (expected)",
+    "note": "structurally consistent"
+  },
+  "electron_fraction_ne0": {
+    "coeval_direct": "ne0_cgs() [helium-inclusive] = 2.064357e-07 cm^-3",
+    "stitched": "NE0_HYDROGEN_ONLY [never overridden by script 03] = 2.060000e-07 cm^-3",
+    "ratio_squared_D_ell_impact": "1.0042 (~0.4% systematic)",
+    "note": "documented in constants.py's own docstring as the 'primary source of the baseline offset'"
+  }
+}

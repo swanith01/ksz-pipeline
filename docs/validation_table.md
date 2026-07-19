@@ -174,6 +174,14 @@ run, job B) and script 08 (validation diagnostics, job C) — two separate
 scripts, two separate processes — both independently computed the stitched
 kSZ map's RMS as 1.4095e-06, matching to 5 significant figures.
 
+**(d) D_3000 re-derivation, exact match.** Re-running `ksz_map_to_Dl` on
+job C's independently-saved map reproduced job B's own logged D_3000 to
+4 decimal places (4.0111 both ways). This closes the loop started by (c):
+not just the map, but the power derived from it, is fully reproducible.
+The 2.25× direct-vs-stitched gap is confirmed to be a genuine cross-method
+disagreement — nothing hiding in map generation or the D_ell extraction
+step itself.
+
 **Not yet done:** literally re-running script 02 twice from a clean state
 and diffing the two output files bit-for-bit. (a) and (b) are strong
 indirect evidence but a direct repeat-run comparison would be the cleanest

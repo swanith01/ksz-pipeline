@@ -236,6 +236,7 @@ def main(config_path):
         ksz_map_trunc = compute_ksz_map(
             density_1plus[:, :, :idx], x_HII_field[:, :, :idx], v_los_Mpc_s[:, :, :idx],
             z_arr[:idx], ds[:idx-1], visibility_3D[:, :, :idx],
+            ne0=ne0_cgs(),
             patchy_mask_3D=patchy_mask_3D[:, :, :idx],
         )
         ell_t, Dl_t, _ = ksz_map_to_Dl(ksz_map_trunc, BOX_LEN)

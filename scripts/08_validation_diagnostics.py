@@ -42,7 +42,7 @@ from ksz_pipeline.ksz.stitch_from_coeval import stitch_lightcone_from_coeval, bu
 from ksz_pipeline.ksz.optical_depth import (compute_tau, compute_visibility,
                                              analytic_tau_below, compute_patchy_mask)
 from ksz_pipeline.ksz.lightcone_integral import compute_ksz_map
-from ksz_pipeline.utils.constants import MPC_CM
+from ksz_pipeline.utils.constants import MPC_CM, ne0_cgs
 
 
 def get_commit_hash():
@@ -127,6 +127,7 @@ def main(config_path):
 
     ksz_map = compute_ksz_map(density_1plus, x_HII_field, v_los_Mpc_s,
                                z_arr, ds, visibility_3D,
+                               ne0=ne0_cgs(),
                                patchy_mask_3D=patchy_mask_3D)
 
     np.save(f"{out_dir}/ksz_map_stitched.npy", ksz_map)

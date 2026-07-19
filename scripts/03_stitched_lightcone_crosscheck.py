@@ -35,7 +35,7 @@ from ksz_pipeline.ksz.stitch_from_coeval import stitch_lightcone_from_coeval, bu
 from ksz_pipeline.ksz.optical_depth import (compute_tau, compute_visibility,
                                              analytic_tau_below, compute_patchy_mask)
 from ksz_pipeline.ksz.lightcone_integral import compute_ksz_map, ksz_map_to_Dl
-from ksz_pipeline.utils.constants import MPC_CM
+from ksz_pipeline.utils.constants import MPC_CM, ne0_cgs
 
 
 def main(config_path):
@@ -101,6 +101,9 @@ def main(config_path):
     print("Integrating kSZ map...")
     ksz_map = compute_ksz_map(density_1plus, x_HII_field, v_los_Mpc_s,
                                z_arr, ds, visibility_3D,
+                               ne0=ne0_cgs(),  # FIXED 19Jul2026: was silently defaulting to
+                               # NE0_HYDROGEN_ONLY, a ~0.4% mismatch vs coeval-direct's
+                               # helium-inclusive convention -- now explicit and consistent
                                patchy_mask_3D=patchy_mask_3D)
     print(f"  ksz_map shape: {ksz_map.shape}  (should be ({HII_DIM},{HII_DIM}), "
           f"no reshape needed -- unlike script 01, there's no stray "

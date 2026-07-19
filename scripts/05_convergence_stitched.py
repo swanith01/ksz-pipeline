@@ -57,7 +57,7 @@ def main(config_path, sweep, angle_deg=0.0):
         D3000_vals.append(d3000)
         print(f"{tag:<16} {results[tag]['n_lc_pix']:>10} {d3000:>12.4g}")
 
-    summary_path = f"{out_dir}/convergence_stitched_{sweep}.npz"
+    summary_path = f"{out_dir}/convergence_stitched_{sweep}_angle{angle_deg:g}.npz"
     save_dict = dict(x_values=x_values, D3000=D3000_vals,
                       tags=[p[2] for p in param_list])
     # Full D_ell curves were already computed by run_one_config -- save
@@ -70,7 +70,7 @@ def main(config_path, sweep, angle_deg=0.0):
     np.savez(summary_path, **save_dict)
     print(f"\nSaved -> {summary_path}")
 
-    plot_path = f"{plot_dir}/D3000_convergence_stitched_{sweep}"
+    plot_path = f"{plot_dir}/D3000_convergence_stitched_{sweep}_angle{angle_deg:g}"
     plot_d3000_convergence(
         x_values, {'Stitched lightcone': D3000_vals},
         xlabel=xlabel, title=f'Stitched-lightcone {sweep} convergence',

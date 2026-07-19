@@ -58,8 +58,16 @@ def main(config_path, sweep, angle_deg=0.0):
         print(f"{tag:<16} {results[tag]['n_lc_pix']:>10} {d3000:>12.4g}")
 
     summary_path = f"{out_dir}/convergence_stitched_{sweep}.npz"
-    np.savez(summary_path, x_values=x_values, D3000=D3000_vals,
-             tags=[p[2] for p in param_list])
+    save_dict = dict(x_values=x_values, D3000=D3000_vals,
+                      tags=[p[2] for p in param_list])
+    # Full D_ell curves were already computed by run_one_config -- save
+    # them too, not just the summary D_3000 (added 19Jul2026, so future
+    # convergence plots can show full curves, not just a single point).
+    for i, (L, N, tag) in enumerate(param_list):
+        save_dict[f"ell_{i}"]     = results[tag]['ell']
+        save_dict[f"Dl_{i}"]      = results[tag]['Dl']
+        save_dict[f"Dl_err_{i}"]  = results[tag]['Dl_err']
+    np.savez(summary_path, **save_dict)
     print(f"\nSaved -> {summary_path}")
 
     plot_path = f"{plot_dir}/D3000_convergence_stitched_{sweep}"

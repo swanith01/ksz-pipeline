@@ -109,8 +109,25 @@ def main(config_path):
           f"no reshape needed -- unlike script 01, there's no stray "
           f"leading dim here since these are proper 3D arrays throughout)")
 
+    # Signal-weighted effective comoving distance for the ell<->k
+    # conversion, replacing the previous hardcoded chi_Mpc=7800 default
+    # (confirmed too low -- see docs/validation_table.md). Weighted by
+    # the RMS (not mean -- kSZ is a fluctuation field around zero;
+    # mean-weighting would be near-meaningless) of each LOS slice's own
+    # contribution, using the SAME tau/visibility/patchy_mask weighting
+    # compute_ksz_map itself already uses -- not a separately-invented
+    # weighting scheme.
+    integrand_for_weight = density_1plus * x_HII_field * v_los_Mpc_s
+    if patchy_mask_3D is not None:
+        integrand_for_weight = integrand_for_weight * patchy_mask_3D
+    integrand_for_weight = integrand_for_weight * visibility_3D
+    slice_rms = np.sqrt(np.mean(integrand_for_weight**2, axis=(0, 1)))
+    chi_eff = float(np.sum(slice_rms * pos_axis) / np.sum(slice_rms))
+    print(f"  [chi_eff] signal-weighted effective comoving distance = "
+          f"{chi_eff:.1f} Mpc (previous hardcoded default was 7800 Mpc)")
+
     print("Computing D_ell...")
-    ell, Dl, Dl_err = ksz_map_to_Dl(ksz_map, BOX_LEN)
+    ell, Dl, Dl_err = ksz_map_to_Dl(ksz_map, BOX_LEN, chi_Mpc=chi_eff)
 
     import os
     os.makedirs(out_dir, exist_ok=True)

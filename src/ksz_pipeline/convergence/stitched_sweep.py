@@ -11,6 +11,21 @@ analytic_tau_below, compute_patchy_mask), ksz.lightcone_integral
 (compute_ksz_map, ksz_map_to_Dl) -- exactly the pipeline
 03_stitched_lightcone_crosscheck.py runs for a single configuration,
 looped here over a parameter list.
+
+CHANGES (2026-07-22):
+1. run_one_config now accepts optional z_lo/z_hi/chi_Mpc, used by the dz
+   sweep (script 13) to match the closure test's unified window and
+   chi_eff. Defaults to None -- OLD BEHAVIOR (stitched's own native
+   window, chi_Mpc=7800 default) is preserved for existing callers
+   (script 05's box-size/resolution sweep, via run_sweep) that don't
+   pass these.
+2. compute_ksz_map now explicitly passes ne0=ne0_cgs() (the
+   helium-inclusive value, commit 6fd040e), fixing a previously
+   undiscovered instance of the ne0 convention mismatch -- this call
+   was silently using compute_ksz_map's NE0_HYDROGEN_ONLY default.
+   This is UNCONDITIONAL (not gated behind z_lo/z_hi/chi_Mpc), so any
+   future rerun of script 05's sweep will also shift by the same
+   confirmed ~0.4% effect.
 """
 
 import os
@@ -24,11 +39,12 @@ from ..ksz.stitch_from_coeval import build_los_z_grid, comoving_distance_mpc
 from ..ksz.optical_depth import (compute_tau, compute_visibility,
                                   analytic_tau_below, compute_patchy_mask)
 from ..ksz.lightcone_integral import compute_ksz_map, ksz_map_to_Dl
-from ..utils.constants import MPC_CM
+from ..utils.constants import MPC_CM, ne0_cgs
 
 
 def run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max, cache_dir,
-                    tag, angle_deg=0.0, N_THREADS=None, random_seed=None):
+                    tag, angle_deg=0.0, N_THREADS=None, random_seed=None,
+                    z_lo=None, z_hi=None, chi_Mpc=None):
     """
     Stitch a lightcone and compute D_ell for one (BOX_LEN, HII_DIM)
     configuration. No pickle-level caching of its own here (unlike
@@ -51,6 +67,17 @@ def run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max, cache_dir,
                         explicitly (e.g. config's 21cmfast.N_THREADS)
                         rather than relying solely on OMP_NUM_THREADS
                         being set in whatever context this runs in
+    z_lo, z_hi        : float, optional. If BOTH given, the LOS integral
+                        is truncated to this z-range BEFORE building the
+                        map (matching the unified/matched window from
+                        the closure test, script 14) instead of relying
+                        on this function's own patchy_mask_3D threshold
+                        over the full z_min-z_max range. Default None --
+                        old behavior (stitched's own native window).
+    chi_Mpc           : float, optional. If given, passed through to
+                        ksz_map_to_Dl in place of its hardcoded
+                        chi_Mpc=7800 default. Default None -- old
+                        behavior (7800 default).
 
     Returns
     -------
@@ -80,21 +107,49 @@ def run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max, cache_dir,
     tau_at_lc, visibility, visibility_3D = compute_visibility(tau, z_arr, z_mid)
     patchy_mask, patchy_mask_3D = compute_patchy_mask(x_e_interp)
 
+    if z_lo is not None and z_hi is not None:
+        # Matched-window mode (script 14 convention): truncate to the
+        # SAME unified window used for the closure test, rather than
+        # this variant's own native patchy_mask_3D threshold on the
+        # full z_min-z_max range. Isolates the interpolation-density
+        # variable from window-definition drift across dz variants.
+        i0 = np.searchsorted(z_arr, z_lo)
+        i1 = np.searchsorted(z_arr, z_hi)
+        density_1plus  = density_1plus[:, :, i0:i1]
+        x_HII_field    = x_HII_field[:, :, i0:i1]
+        v_los_Mpc_s    = v_los_Mpc_s[:, :, i0:i1]
+        z_arr_used     = z_arr[i0:i1]
+        ds_used        = ds[i0:i1 - 1]
+        visibility_3D  = visibility_3D[:, :, i0:i1]
+        patchy_mask_3D = patchy_mask_3D[:, :, i0:i1]
+    else:
+        z_arr_used, ds_used = z_arr, ds
+
     ksz_map = compute_ksz_map(density_1plus, x_HII_field, v_los_Mpc_s,
-                               z_arr, ds, visibility_3D,
-                               patchy_mask_3D=patchy_mask_3D)
-    ell, Dl, Dl_err = ksz_map_to_Dl(ksz_map, BOX_LEN)
+                               z_arr_used, ds_used, visibility_3D,
+                               ne0=ne0_cgs(), patchy_mask_3D=patchy_mask_3D)
+
+    if chi_Mpc is not None:
+        ell, Dl, Dl_err = ksz_map_to_Dl(ksz_map, BOX_LEN, chi_Mpc=chi_Mpc)
+    else:
+        ell, Dl, Dl_err = ksz_map_to_Dl(ksz_map, BOX_LEN)
+
     D3000 = float(np.interp(3000, ell, Dl)) if len(ell) else float('nan')
 
     return dict(ell=ell, Dl=Dl, Dl_err=Dl_err, D3000=D3000,
                 ksz_map_rms=float(np.sqrt(np.mean(ksz_map**2))),
-                n_lc_pix=len(z_arr), cell_size=cell_size)
+                n_lc_pix=len(z_arr_used), cell_size=cell_size)
 
 
 def run_sweep(param_list, z_snapshots, z_min, z_max, cache_dir,
               angle_deg=0.0, N_THREADS=None, random_seed=None):
     """
     Run run_one_config for each configuration in param_list.
+
+    Unchanged behavior: does not pass z_lo/z_hi/chi_Mpc, so this
+    continues to use stitched's own native window and the 7800 default
+    -- box-size/resolution sweep results are only affected by the
+    unconditional ne0 fix inside run_one_config (~0.4%, confirmed small).
 
     Parameters
     ----------

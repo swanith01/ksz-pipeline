@@ -19,6 +19,12 @@ uniform in z (finer near the reionization transition, coarser at the
 tails, same as the original script's dz=0.25/0.50 convention was for a
 uniform grid), so "every Nth point" is the honest generalization rather
 than assuming a fixed dz value applies globally.
+
+CHANGE (2026-07-22): run_dz_sweep_stitched now accepts optional
+z_lo/z_hi/chi_Mpc, passed straight through to stitched_sweep.run_one_config
+for every dz variant -- so all variants share the SAME closure-test
+window and chi_eff, isolating the interpolation-density variable this
+sweep is meant to test. See script 13 and stitched_sweep.py for details.
 """
 
 import numpy as np
@@ -101,7 +107,8 @@ def run_dz_sweep_coeval(z_fine, dz_multiples, BOX_LEN, HII_DIM, cache_dir,
 
 
 def run_dz_sweep_stitched(z_fine, dz_multiples, BOX_LEN, HII_DIM, z_min, z_max,
-                           cache_dir, angle_deg=0.0, N_THREADS=None, random_seed=None):
+                           cache_dir, angle_deg=0.0, N_THREADS=None, random_seed=None,
+                           z_lo=None, z_hi=None, chi_Mpc=None):
     """
     Stitched-lightcone D_ell at multiple SNAPSHOT-sampling densities
     (how many coeval boxes get interpolated between), at fixed
@@ -126,6 +133,14 @@ def run_dz_sweep_stitched(z_fine, dz_multiples, BOX_LEN, HII_DIM, z_min, z_max,
                              see module docstring)
     cache_dir              : str
     angle_deg               : float, default 0
+    z_lo, z_hi, chi_Mpc     : optional, passed straight through to
+                              stitched_sweep.run_one_config for EVERY
+                              dz variant -- so all variants share the
+                              same window/chi rather than each computing
+                              their own, isolating interpolation density
+                              as the only thing varying across the sweep.
+                              Default None -- old behavior, per-variant
+                              native window and chi_Mpc=7800 default.
 
     Returns
     -------
@@ -143,6 +158,7 @@ def run_dz_sweep_stitched(z_fine, dz_multiples, BOX_LEN, HII_DIM, z_min, z_max,
         results[label] = run_one_config(BOX_LEN, HII_DIM, subsets[m],
                                          z_min, z_max, cache_dir, label,
                                          angle_deg=angle_deg,
-                                         N_THREADS=N_THREADS, random_seed=random_seed)
+                                         N_THREADS=N_THREADS, random_seed=random_seed,
+                                         z_lo=z_lo, z_hi=z_hi, chi_Mpc=chi_Mpc)
         print(f"    D_3000={results[label]['D3000']:.4g} uK^2", flush=True)
     return results

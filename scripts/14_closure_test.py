@@ -117,19 +117,47 @@ def chi_eff_power_weighted(density_1plus, x_HII_field, v_los_Mpc_s, red_axis,
 
 
 def alt_chi_candidates(ZS, results_qperp_all, z_lo, z_hi):
-    """Two alternatives to chi_eff, for the robustness comparison --
-    NOT for picking whichever gives the best-looking gap closure."""
-    xH_mean = np.array([results_qperp_all[z]['xH_mean'] for z in ZS])
+    """Three alternatives to chi_eff, for the robustness comparison --
+    NOT for picking whichever gives the best-looking gap closure.
+
+    BUG FIX (found from job 1684054's output: z=4.00 fell OUTSIDE the
+    printed unified window [4.50, 18.00], which is impossible for a
+    real crossing). The original code reversed xH_mean before calling
+    np.interp, under the wrong assumption that xH_mean decreases with
+    ascending z. It actually INCREASES with z (more neutral further
+    back in time) -- so xH_mean is already ascending for ascending ZS,
+    and reversing it broke np.interp's ascending-xp requirement,
+    silently returning a boundary artifact instead of a real crossing.
+
+    ALSO RELABELED: xH_mean=0.5 is reionization's MIDPOINT, not its END.
+    "z_end of reionization" as literally meant -- the patchy/homogeneous
+    boundary -- is z_lo itself, already computed by
+    unified_patchy_window(). No crossing detection needed for that one.
+    """
+    xH_mean = np.array([results_qperp_all[z]['xH_mean'] for z in ZS])  # ascending with z
     ZS_arr = np.array(ZS)
     in_window = (ZS_arr >= z_lo) & (ZS_arr <= z_hi)
 
-    z_half = np.interp(0.5, xH_mean[::-1], ZS_arr[::-1])
-    chi_end_reion = cosmo.comoving_distance(z_half).value
+    # (a) chi at z_lo -- the window's own "patchy regime starts here"
+    # boundary. This IS "z_end of reionization" as the advisor meant it.
+    chi_z_end = cosmo.comoving_distance(z_lo).value
+
+    # (b) chi at reionization MIDPOINT (xH_mean crosses 0.5) -- kept as a
+    # secondary diagnostic only, NOT "z_end". Fixed: no array reversal.
+    if not np.all(np.diff(xH_mean) >= 0):
+        print("WARNING: xH_mean is not monotonically increasing with z -- "
+              "the 0.5 crossing below may not be unique/meaningful.")
+    z_mid = np.interp(0.5, xH_mean, ZS_arr)
+    chi_midpoint = cosmo.comoving_distance(z_mid).value
 
     chi_window = np.array([cosmo.comoving_distance(z).value for z in ZS_arr[in_window]])
     chi_unweighted = chi_window.mean()
 
-    return {"chi_end_reionization": (z_half, chi_end_reion), "chi_unweighted_mean": chi_unweighted}
+    return {
+        "chi_z_end_reionization": (z_lo, chi_z_end),
+        "chi_reionization_midpoint": (z_mid, chi_midpoint),
+        "chi_unweighted_mean": chi_unweighted,
+    }
 
 
 def ratio_on_common_grid(ell_a, Dl_a, ell_b, Dl_b):
@@ -189,8 +217,10 @@ def main(config_path):
                                       ds, visibility_3D, patchy_mask_3D, z_lo, z_hi, ne0_cgs())
     alt_chi = alt_chi_candidates(ZS, results_qperp_all, z_lo, z_hi)
     print(f"\nchi_eff (power-weighted, unified window)  = {chi_eff:.1f} Mpc")
-    print(f"chi at xH_mean=0.5 crossing                = {alt_chi['chi_end_reionization'][1]:.1f} Mpc "
-          f"(z={alt_chi['chi_end_reionization'][0]:.2f})")
+    print(f"chi at z_end of reionization (=z_lo)       = {alt_chi['chi_z_end_reionization'][1]:.1f} Mpc "
+          f"(z={alt_chi['chi_z_end_reionization'][0]:.2f})")
+    print(f"chi at reionization midpoint (xH_mean=0.5) = {alt_chi['chi_reionization_midpoint'][1]:.1f} Mpc "
+          f"(z={alt_chi['chi_reionization_midpoint'][0]:.2f})")
     print(f"chi unweighted mean over window            = {alt_chi['chi_unweighted_mean']:.1f} Mpc")
 
     # ================================================================
@@ -244,7 +274,8 @@ def main(config_path):
     d3000_direct = float(np.interp(3000, ell_d, Dl_d))
     chi_candidates = {
         "chi_eff": chi_eff,
-        "chi_end_reionization": alt_chi["chi_end_reionization"][1],
+        "chi_z_end_reionization": alt_chi["chi_z_end_reionization"][1],
+        "chi_reionization_midpoint": alt_chi["chi_reionization_midpoint"][1],
         "chi_unweighted_mean": alt_chi["chi_unweighted_mean"],
     }
     d3000_by_chi = {}
@@ -287,7 +318,8 @@ def main(config_path):
               ell_direct=ell_d, Dl_direct=Dl_d, sigma_Dl_direct=sigma_Dl_d,
               ell_stitched=ell_s, Dl_stitched=Dl_s, Dl_stitched_err=Dl_s_err,
               ell_ratio=ell_ratio, ratio=ratio,
-              chi_eff=chi_eff, chi_end_reion=alt_chi['chi_end_reionization'][1],
+              chi_eff=chi_eff, chi_z_end_reionization=alt_chi['chi_z_end_reionization'][1],
+              chi_reionization_midpoint=alt_chi['chi_reionization_midpoint'][1],
               chi_unweighted=alt_chi['chi_unweighted_mean'],
               d3000_direct=d3000_direct, d3000_by_chi=d3000_by_chi,
               z_lo=z_lo, z_hi=z_hi, z_cut=z_cut)

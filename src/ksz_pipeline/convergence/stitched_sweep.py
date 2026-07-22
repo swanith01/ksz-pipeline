@@ -142,14 +142,19 @@ def run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max, cache_dir,
 
 
 def run_sweep(param_list, z_snapshots, z_min, z_max, cache_dir,
-              angle_deg=0.0, N_THREADS=None, random_seed=None):
+              angle_deg=0.0, N_THREADS=None, random_seed=None,
+              z_lo=None, z_hi=None, chi_Mpc=None):
     """
     Run run_one_config for each configuration in param_list.
 
-    Unchanged behavior: does not pass z_lo/z_hi/chi_Mpc, so this
-    continues to use stitched's own native window and the 7800 default
-    -- box-size/resolution sweep results are only affected by the
-    unconditional ne0 fix inside run_one_config (~0.4%, confirmed small).
+    z_lo, z_hi, chi_Mpc : optional, passed through to run_one_config for
+        EVERY point in the sweep -- so box-size/resolution points all
+        share the closure test's matched window and chi_eff, same
+        principle as run_dz_sweep_stitched. Default None -- old
+        behavior (each point's own native window, chi_Mpc=7800 default)
+        preserved for any caller that doesn't pass these. Added
+        2026-07-23 alongside the resolution sweep's 1024^3 point --
+        see script 05.
 
     Parameters
     ----------
@@ -168,7 +173,8 @@ def run_sweep(param_list, z_snapshots, z_min, z_max, cache_dir,
               f"(dx={dx:.3f} Mpc) ===", flush=True)
         out[tag] = run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max,
                                    cache_dir, tag, angle_deg=angle_deg,
-                                   N_THREADS=N_THREADS, random_seed=random_seed)
+                                   N_THREADS=N_THREADS, random_seed=random_seed,
+                                   z_lo=z_lo, z_hi=z_hi, chi_Mpc=chi_Mpc)
         print(f"  n_lc_pix={out[tag]['n_lc_pix']}  "
               f"D_3000={out[tag]['D3000']:.4g} uK^2", flush=True)
     return out

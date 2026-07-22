@@ -5,13 +5,25 @@ constraint is encouraging but does not resolve the internal factor-of-two-plus
 disagreement between them, which remains open. This document supersedes the
 earlier short table (previous version: see git history of this file).
 
+**Update (2026-07-22): closure test (script 14) complete on the matched
+window.** New results are in §1b below. Two things this changes about how to
+read the rest of this document:
+- **§1&2's per-slice Δ(D₃₀₀₀) columns are not directly comparable between
+  methods** — see the caveat inserted at the top of §1&2. This was not
+  flagged when that section was first written and affects how to interpret
+  the "77×" finding below.
+- **Open Item #1 (z-range mismatch) is downgraded** — the closure test shows
+  it explains only 11.6% of the gap, not the bulk of it as previously
+  hypothesized. See revised Open Items list at the end.
+
 **Scope, per instruction:** direct vs. stitched only, same seed, same fields,
 matched redshift slices. Georgiev-Eq10 is a separate audit (its own ~3×
 normalization issue, tracked independently) and is excluded here.
 
 **Commit / config:** results below come from the reseeded run at commit
 `76e68fe` (the commit that fixed `random_seed` never reaching py21cmfast).
-Two subsequent fixes are **not yet reflected** in the numbers below:
+Two subsequent fixes are **not yet reflected** in the §1&2 numbers below
+(the §1b closure test numbers ARE current, see that section):
 - `23419d3` (`write=True`, fixes a caching bug — does not change any physics,
   only speed; unaffected results, safe to leave as-is)
 - `6fd040e` (ne0 helium/hydrogen convention fix — confirmed ~0.4% effect,
@@ -21,12 +33,31 @@ Two subsequent fixes are **not yet reflected** in the numbers below:
 
 ## 1 & 2. Per-slice weighted kSZ contribution and cumulative D_3000(<z)
 
+**⚠ CAVEAT, added 2026-07-22 — read before interpreting the table below:**
+The two Δ(D₃₀₀₀) columns are **not measuring the same kind of quantity**,
+even though they're tabulated at the same z checkpoints. Coeval-direct's
+Δ(D₃₀₀₀) at a checkpoint is that shell's own P_qperp(k), summed **incoherently**
+into the Limber integral (no cross-shell correlation, by construction of the
+Limber approximation). Stitched's Δ(D₃₀₀₀) is the change in FFT power of a
+**coherently-built** real-space map when that shell's LOS-interpolated data
+is added — because the whole map is Fourier-transformed at once, this
+reflects that shell's coupling with *every* shell already in the map, not
+just its own standalone signal. So the "77× at z=18" finding below is real
+(the curves do diverge there) but should be read as **evidence of where the
+two methods' cumulative curves diverge**, not as proof that stitched has
+spurious excess power *localized to* z>13. Some of that apparent excess
+could be coherent cross-shell coupling with the whole z=4.5–18 structure
+already built into the map by that point. This is directly relevant to
+Open Item #1's revised status below.
+
 Computed at coeval-direct's own 29 redshift checkpoints (see Audit
 Methodology below for why coeval-direct's grid, not stitched's, sets the
 checkpoints). Self-check: summing every coeval-direct per-slice contribution
 reproduces the trusted `compute_cell` output to within 0.06% (1.7812 vs.
 1.7822 μK²) — the per-slice breakdown below is faithful, not an artifact of
-the extraction method.
+the extraction method. (This 1.7822 figure is independently reproduced by
+the §1b closure test below, run via a completely different code path —
+see §1b.)
 
 | z | coeval Δ(D₃₀₀₀) | coeval cumulative | stitched cumulative | stitched Δ(D₃₀₀₀) |
 |---|---|---|---|---|
@@ -45,29 +76,90 @@ the extraction method.
 | 19.0 | — (excluded, xH_mean outside patchy window) | — | 4.0092 | 0.0060 |
 | 20.0 | — | — | 4.0111 | 0.0019 |
 
-**The key finding, stated plainly:** past z~13, coeval-direct's per-slice
-contribution is correctly near-zero (the universe is >98% neutral, essentially
-nothing to source patchy kSZ). Stitched keeps adding real, non-trivial
-signal all the way to z~18-19 — at z=18, stitched's per-slice contribution
-(0.0154) is **~77× larger** than coeval-direct's (0.0002) at the same
-redshift. This is the single largest, most concrete, most localized
-discrepancy found in this audit — not diffuse noise, but a specific
-redshift range where one method sees real signal and the other correctly
-sees none.
+**The key finding, stated plainly (see caveat above for interpretation
+limits):** past z~13, coeval-direct's per-slice contribution is correctly
+near-zero (the universe is >98% neutral, essentially nothing to source
+patchy kSZ). Stitched keeps adding real, non-trivial signal all the way to
+z~18-19 — at z=18, stitched's per-slice contribution (0.0154) is **~77×
+larger** than coeval-direct's (0.0002) at the same redshift.
 
-**Leading candidate explanation (not yet confirmed):** the two methods define
-"patchy regime" differently — coeval-direct via a per-snapshot `xH_mean`
-threshold (window: z=4.5–18.0), stitched via a LOS-interpolated `x_e`
-threshold (window: z=4.19–19.80). Stitched's wider window overlaps exactly
-the redshift range where the excess accumulates.
+**Leading candidate explanation — REVISED, see §1b:** the two methods
+define "patchy regime" differently — coeval-direct via a per-snapshot
+`xH_mean` threshold (window: z=4.5–18.0), stitched via a LOS-interpolated
+`x_e` threshold (window: z=4.19–19.80 this run). **The closure test (§1b)
+now shows this window mismatch explains only 11.6% of the total gap** —
+it is a real, confirmed effect, but not the primary driver it was
+hypothesized to be here. See Open Items for the current ranking.
+
+---
+
+## 1b. Closure test update (script 14, 2026-07-22) — matched window + chi_eff
+
+Direct-vs-stitched advisor-requested closure test, run with the **same**
+unified z-window applied to both methods (intersection of coeval's and
+stitched's own patchy windows), removing the window-definition mismatch
+flagged in §1&2 entirely, and using a properly signal-weighted `chi_eff`
+in place of the hardcoded `chi_Mpc=7800` default (see §4).
+
+**Unified window:** z = [4.50, 18.00] — this equals coeval-direct's own
+window exactly (confirms coeval's window is fully nested inside stitched's,
+as anticipated in the handoff notes).
+
+**D_3000, matched window:**
+| | value | notes |
+|---|---|---|
+| direct | 1.7822 μK² | matches §1&2's independently-derived 1.7822 exactly — two separate code paths (script 11's per-slice extraction vs. script 14's windowed-subset `compute_cell` call) agree |
+| stitched (chi_eff) | 4.0892 μK² | chi_eff = 8504.0 Mpc (signal-weighted, see §4) |
+| **ratio** | **2.29×** | supersedes §3's 2.25× (full-window, broken-chi value) — see §3 for reconciliation |
+
+**z≥13 exclusion test:** total excess (stitched − direct, full matched
+window) = 2.4085 μK². Excess remaining with a z<13 cut = 2.1296 μK².
+**Only 11.6% of the excess is attributable to z≥13.** This directly revises
+§1&2's leading hypothesis (see Open Items) — the window-definition mismatch
+is real but is not where most of the gap lives; the other 88.4% occurs
+*within* the shared z=4.5–18 window both methods already agree on.
+
+**Chi problem: underway, not yet closed.** Three chi candidates were
+compared (chi_eff, chi at z_end-of-reionization = chi(z_lo), chi at
+reionization midpoint via xH_mean=0.5 crossing, unweighted mean chi over
+the window) as a robustness check on the single-chi approximation in
+`ksz_map_to_Dl` — not to select whichever narrows the gap. **A bug was
+found and fixed** in the reionization-midpoint crossing calculation
+(reversed array broke `np.interp`'s ascending-xp assumption, silently
+returning an out-of-window artifact z=4.00 instead of a real crossing).
+The fix is committed; **a corrected rerun (job 1684234) is queued on the
+cluster and has not yet completed** due to cluster traffic — numbers above
+for chi_eff itself are already correct and unaffected by this bug (it was
+isolated to the other two candidates' labeling), but the full three-way
+D_3000 comparison table needs 1684234's output before it can be reported
+here. **Update this section once 1684234 completes.**
+
+Plots: `data/plots/closure_patchy_ksz_vs_limits.pdf` (patchy kSZ vs. SPT-3G/ACT
+2σ upper limits, matched window), `data/plots/closure_total_ksz_vs_observations.pdf`
+(+ Shaw et al. 2012 late-time template vs. Chaubal+26 total-kSZ points —
+note the Shaw template is extrapolated from zrei=[8,12] down to the
+matched window's zrei_eff=4.50, well outside Shaw's calibrated range;
+treat the total-kSZ curve's absolute normalization as illustrative, not
+precise). Source: `notebooks/exploratory/closure_test_plots.py`.
 
 ---
 
 ## 3. Map mean, RMS, and direct-vs-stitched amplitude ratio
 
-**D_3000 amplitude ratio:** stitched / coeval-direct = 4.0111 / 1.7822 = **2.25×**
-(previously, pre-reseed: 0.44× — the gap has changed direction, not just
-magnitude, since reseeding).
+**D_3000 amplitude ratio — two values, different provenance:**
+- **Pre-window-fix, full window, broken chi_Mpc=7800 default:**
+  stitched / coeval-direct = 4.0111 / 1.7822 = 2.25× (previously, pre-reseed:
+  0.44× — the gap has changed direction, not just magnitude, since reseeding)
+- **§1b closure test, matched window, chi_eff-corrected:**
+  stitched / coeval-direct = 4.0892 / 1.7822 = **2.29×**
+
+These are close in magnitude (2.25× vs 2.29×) despite fixing two real,
+confirmed issues (window mismatch + hardcoded chi) simultaneously — the
+chi fix alone shifts stitched's windowed D_3000 by only ~2.1% (4.0032→4.0892
+at the same z=18 truncation), consistent with §4's Open Item #2
+characterization of chi_Mpc as a "real but secondary effect." **The gap is
+not primarily a window-definition or chi-convention artifact** — see
+revised Open Items ranking.
 
 **Full-map mean/RMS (reseeded run, commit 83c88e9, from `validation_run_stats.json`):**
 | | direct (coeval-direct — N/A, no map) | stitched (full LOS-integrated map) |
@@ -107,8 +199,8 @@ for or against agreement between the methods.
 | Speed of light | `C_CGS` (constants.py) | `C_CGS` (constants.py) | Identical, shared constant |
 | Velocity | cm/s (post-conversion), enters momentum field q=w·v, squared in P_qperp | cm/s→Mpc/s, enters linearly in real-space integrand | Conversion is shared/common code — see detail below. Not a source of the discrepancy. |
 | Electron fraction (ne0) | `ne0_cgs()`, helium-inclusive = 2.064357e-07 cm⁻³ | was `NE0_HYDROGEN_ONLY` = 2.060000e-07 cm⁻³ | **Fixed in commit 6fd040e** (~0.4% effect, confirmed small — not the main discrepancy). Not yet reflected in the numbers above. |
-| ℓ↔k conversion reference distance (stitched only) | N/A (per-z dynamic χ(z) throughout) | hardcoded `chi_Mpc=7800` default in `ksz_map_to_Dl`, never overridden by script 03 | **Confirmed real, not yet fixed.** Empirically tested: moving the reference toward higher z narrows D_3000 by up to ~18% (still far short of the 2.25× gap) — a real but secondary effect |
-| Patchy-regime definition | `xH_mean` per-snapshot threshold, window z=4.5–18.0 | LOS-interpolated `x_e` threshold, window z=4.24–19.44 (this reseeded run; earlier pre-reseed run gave 4.19–19.80 — some realization-to-realization shift, expected) | **Confirmed real, unresolved** — directly implicated in the item 1/2 finding above |
+| ℓ↔k conversion reference distance (stitched only) | N/A (per-z dynamic χ(z) throughout) | hardcoded `chi_Mpc=7800` default in `ksz_map_to_Dl`, never overridden by script 03 | **In progress.** chi_eff=8504.0 Mpc now computed (signal-weighted, power-weighted mean comoving distance) and used in the §1b closure test — shifts stitched D_3000 by only ~2.1% at fixed window, confirming this is a secondary effect, not the main discrepancy. Robustness check across 3 chi candidates pending job 1684234 (queued, cluster traffic) — **chi problem underway, not yet closed.** |
+| Patchy-regime definition | `xH_mean` per-snapshot threshold, window z=4.5–18.0 | LOS-interpolated `x_e` threshold, window z=4.24–19.44 (this reseeded run; earlier pre-reseed run gave 4.19–19.80 — some realization-to-realization shift, expected) | **Confirmed real, but NOT the primary driver of the gap** — §1b's z≥13 exclusion test shows this explains only 11.6% of the excess. Downgraded from "leading hypothesis" — see Open Items. |
 
 ### Velocity: raw box units and Zel'dovich conversion (shared, applied once, identical for both methods)
 
@@ -182,6 +274,11 @@ The 2.25× direct-vs-stitched gap is confirmed to be a genuine cross-method
 disagreement — nothing hiding in map generation or the D_ell extraction
 step itself.
 
+**(e) Closure-test cross-check (2026-07-22).** §1b's direct D_3000 (1.7822,
+via a windowed-subset dict passed through `compute_cell`) matches §1&2's
+independently-extracted 1.7822 (via script 11's per-slice summation) —
+a third, structurally different code path reproducing the same number.
+
 **Not yet done:** literally re-running script 02 twice from a clean state
 and diffing the two output files bit-for-bit. (a) and (b) are strong
 indirect evidence but a direct repeat-run comparison would be the cleanest
@@ -192,12 +289,18 @@ possible confirmation, and is cheap to do given `write=True` is now fixed.
 ## Open items, ranked by how well-understood they currently are
 
 1. **Patchy z-range mismatch → high-z (z>13) signal excess in stitched** —
-   well-characterized above, leading hypothesis identified, not yet fixed.
-2. **chi_Mpc=7800 hardcoded default** — confirmed real, quantified (~18% max),
-   not yet fixed. Proper fix needs a signal-weighted effective χ, not a
-   differently-named fixed redshift (a naive "anchor at z_end" was
-   considered and rejected — it would make the discrepancy worse, not
-   better, since z_end's χ is already close to the broken default).
+   **DOWNGRADED 2026-07-22.** Previously ranked as the leading, best-
+   characterized hypothesis for the gap. §1b's closure test shows it
+   explains only **11.6%** of the total excess — real and confirmed, but
+   a minor contributor, not the primary driver. The remaining 88.4% of
+   the gap occurs within the shared z=4.5–18 window itself, where §1&2's
+   apples-to-apples caveat (coherent vs. incoherent addition, see top of
+   §1&2) becomes the more likely place to look next.
+2. **chi_Mpc=7800 hardcoded default** — **in progress.** chi_eff=8504.0 Mpc
+   now computed and used (§1b, §4); confirmed secondary effect (~2.1% shift
+   at fixed window), consistent with earlier ~18% max-effect estimate as an
+   upper bound, not the typical case. Three-candidate robustness comparison
+   pending job 1684234 (queued, cluster traffic) — not yet fully closed.
 3. **ne0 helium/hydrogen mismatch** — confirmed small (0.4%), fixed in code,
    rerun not yet done.
 4. **Angle-of-stitching sweep does not clearly support the
@@ -210,6 +313,15 @@ possible confirmation, and is cheap to do given `write=True` is now fixed.
    plausibly small-box sample variance, not confirmed either way.
 6. **Field-level regression test (item 3 above) is inconclusive** — proxy
    design flaw, not evidence of anything.
+7. **NEW, 2026-07-22 — coherent vs. incoherent addition (§1&2 caveat).**
+   Now the most likely candidate for the bulk (88.4%) of the gap not
+   explained by item 1. Not yet a "hypothesis" in the same sense as the
+   others — no dedicated test has been designed for it yet, distinct from
+   the resolution non-convergence question. Worth a dedicated audit.
+8. **Resolution non-convergence (stitched still climbing at res512)** —
+   separately tracked, may share a common cause with item 7 above
+   (both point at real-space map construction rather than the Limber
+   sum), not yet disentangled from it.
 
 ---
 
@@ -236,3 +348,7 @@ Source data: `data/products/audit_cumulative_d3000.npz`,
 `audit_per_slice.npz`, `audit_conventions.json`, `audit_field_regression.npz`
 — all committed at `bc10e15`. Raw logs: `fiducial_coeval.log`,
 `fiducial_stitched.log`, `audit_direct_vs_stitched.log`.
+
+**§1b additions (2026-07-22):** `data/products/closure_test.npz`
+(script `scripts/14_closure_test.py`, job 1684054 — corrected rerun 1684234
+pending). Plots via `notebooks/exploratory/closure_test_plots.py`.

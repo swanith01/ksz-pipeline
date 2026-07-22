@@ -15,6 +15,13 @@ z_snapshots match the fiducial config exactly, this reuses the EXISTING
 fiducial py21cmfast cache -- only the stitch+map+FFT step repeats per
 angle, no new box generation.
 
+CHANGE (2026-07-23): now loads chi_eff and the unified window from
+closure_test.npz (script 14), same pattern as scripts 05/13, and passes
+them to run_one_config for EVERY angle. Previously used stitched's own
+native window and the hardcoded chi_Mpc=7800 default -- same convention
+mismatch already fixed elsewhere. NEW DEPENDENCY: requires
+scripts/14_closure_test.py to have been run first.
+
 Produces
 --------
 data/products/convergence_angle_stitched.npz -- angle_deg, D3000,
@@ -48,8 +55,25 @@ def main(config_path, angles):
     out_dir     = cfg['data']['output_dir'].rstrip('/')
     os.makedirs(out_dir, exist_ok=True)
 
+    # Load the unified window + chi_eff from the closure test (script 14) --
+    # same reasoning as scripts 05/13: reused, not recomputed, so every
+    # angle is tested against the exact same reference frame.
+    closure_path = f"{out_dir}/closure_test.npz"
+    if not os.path.exists(closure_path):
+        raise FileNotFoundError(
+            f"{closure_path} not found -- run scripts/14_closure_test.py first. "
+            "This script now reuses its chi_eff and unified window rather than "
+            "computing its own, so it depends on that output existing."
+        )
+    closure = np.load(closure_path)
+    chi_eff = float(closure['chi_eff'])
+    z_lo, z_hi = float(closure['z_lo']), float(closure['z_hi'])
+    d3000_direct_matched = float(np.interp(3000, closure['ell_direct'], closure['Dl_direct']))
+
     print(f"Angle-of-stitching sweep: BOX_LEN={BOX_LEN} Mpc, HII_DIM={HII_DIM} "
           f"(fiducial values -- reusing fiducial cache), angles={angles} deg")
+    print(f"Using matched window z=[{z_lo:.2f}, {z_hi:.2f}] and chi_eff={chi_eff:.1f} Mpc "
+          f"from closure_test.npz (script 14) -- FIXED across every angle.")
 
     results = {}
     for angle in angles:
@@ -58,7 +82,8 @@ def main(config_path, angles):
         r = run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max,
                             cache_dir, tag, angle_deg=float(angle),
                             N_THREADS=sim_cfg['N_THREADS'],
-                            random_seed=sim_cfg['random_seed'])
+                            random_seed=sim_cfg['random_seed'],
+                            z_lo=z_lo, z_hi=z_hi, chi_Mpc=chi_eff)
         results[angle] = r
         print(f"  D_3000={r['D3000']:.4g} uK^2  ksz_map_rms={r['ksz_map_rms']:.4e}", flush=True)
 
@@ -70,7 +95,9 @@ def main(config_path, angles):
 
     save_dict = {"angles": np.array(angles),
                  "D3000": np.array([results[a]['D3000'] for a in angles]),
-                 "ksz_map_rms": np.array([results[a]['ksz_map_rms'] for a in angles])}
+                 "ksz_map_rms": np.array([results[a]['ksz_map_rms'] for a in angles]),
+                 "chi_eff": chi_eff, "z_lo": z_lo, "z_hi": z_hi,
+                 "d3000_direct_matched": d3000_direct_matched}
     for i, angle in enumerate(angles):
         save_dict[f"ell_{i}"] = results[angle]['ell']
         save_dict[f"Dl_{i}"]  = results[angle]['Dl']
@@ -78,10 +105,14 @@ def main(config_path, angles):
     summary_path = f"{out_dir}/convergence_angle_stitched.npz"
     np.savez(summary_path, **save_dict)
     print(f"\nSaved -> {summary_path}")
+    print("(NOTE: this OVERWRITES any earlier angle sweep at this path -- if it "
+          "included points under the OLD convention, those numbers are superseded, "
+          "not preserved alongside these.)")
     print("\nCheck specifically: does the ell~130-180 low-ell spike shrink "
           "or shift as angle_deg increases from 0? A shrinking/shifting "
           "spike would support the periodic-replication hypothesis; an "
           "angle-independent spike would point elsewhere.")
+    print(f"\nCompare to coeval-direct's matched-window D_3000 = {d3000_direct_matched:.4g} uK^2")
 
 
 if __name__ == "__main__":

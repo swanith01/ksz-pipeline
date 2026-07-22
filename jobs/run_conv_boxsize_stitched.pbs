@@ -1,0 +1,43 @@
+#!/bin/bash
+# ============================================================
+# PBS: kSZ-pipeline fiducial run -- stitched lightcone cross-check
+# (script 03) -- 800 Mpc / 128^3
+# ============================================================
+#PBS -N ksz_conv_boxsize_stitched
+#PBS -q workq
+#PBS -l walltime=72:00:00
+#PBS -l select=1:ncpus=32:mem=128gb
+#PBS -j oe
+#PBS -o /user1/swanith/logs/conv_boxsize_stitched.log
+
+set -euo pipefail
+
+echo "=============================================="
+echo "Job ID       : $PBS_JOBID"
+echo "Job name     : $PBS_JOBNAME"
+echo "Queue        : $PBS_QUEUE"
+echo "Submitted by : $PBS_O_LOGNAME"
+echo "Work dir     : $PBS_O_WORKDIR"
+echo "Node list    : $(cat $PBS_NODEFILE)"
+echo "Start time   : $(date)"
+echo "=============================================="
+
+source /user1/swanith/miniconda3/etc/profile.d/conda.sh
+conda activate p21c_v3
+echo "Python       : $(which python)"
+echo "Version      : $(python --version)"
+echo "py21cmfast   : $(python -c 'import py21cmfast; print(py21cmfast.__version__)')"
+echo "ksz_pipeline : $(python -c 'import ksz_pipeline; print(ksz_pipeline.__file__)')"
+echo "----------------------------------------------"
+
+export OMP_NUM_THREADS=32
+
+cd /user1/swanith/ksz-pipeline
+mkdir -p /user1/swanith/logs
+
+echo "Starting fiducial stitched-lightcone run (800 Mpc / 128^3)..."
+python scripts/05_convergence_stitched.py --sweep boxsize --config configs/fiducial.yaml
+
+echo "----------------------------------------------"
+echo "End time : $(date)"
+echo "Done."

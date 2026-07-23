@@ -105,23 +105,38 @@ def main(config_path, angle_deg=0.0):
                                      random_seed=sim_cfg['random_seed'],
                                      z_lo=z_lo, z_hi=z_hi, chi_Mpc=chi_eff)
 
-    print(f"\n{'dz label':<10} {'n_z':>6} {'D3000':>12}")
-    print("-" * 32)
-    D3000_vals, n_z_list = [], []
+    print(f"\n{'dz label':<10} {'n_z':>6} {'D3000':>12} {'ksz_map_rms':>14}")
+    print("-" * 46)
+    D3000_vals, n_z_list, rms_vals = [], [], []
     save_dict = {}
     for i, m in enumerate(sorted(dz_multiples)):
         label = f"dz_x{m}"
         d3000 = results[label]['D3000']
+        rms = results[label]['ksz_map_rms']
         n_z = len([z for z in z_fine][::m])
         D3000_vals.append(d3000)
         n_z_list.append(n_z)
-        print(f"{label:<10} {n_z:>6} {d3000:>12.4g}")
+        rms_vals.append(rms)
+        print(f"{label:<10} {n_z:>6} {d3000:>12.4g} {rms:>14.6e}")
         save_dict[f"ell_{i}"]    = results[label]['ell']
         save_dict[f"Dl_{i}"]     = results[label]['Dl']
         save_dict[f"Dl_err_{i}"] = results[label]['Dl_err']
 
+    # ksz_map_rms is computed on the real-space map BEFORE any window/chi
+    # post-processing -- an independent, chi-blind check on whether the
+    # dz variants' underlying maps genuinely differ. If these come back
+    # exactly/suspiciously identical across dz_x1/x2/x4, that's evidence
+    # of the caching bug coeval_sweep.py's docstring describes (results
+    # instead of results_subset used somewhere), not real convergence.
+    if len(set(f"{r:.10e}" for r in rms_vals)) < len(rms_vals):
+        print("\nWARNING: two or more dz variants have IDENTICAL ksz_map_rms "
+              "to 10 significant figures -- check for a caching bug (e.g. "
+              "the full snapshot cache being used instead of the requested "
+              "subset) before trusting the D_ell convergence above.")
+
     summary_path = f"{out_dir}/convergence_dz_stitched.npz"
     save_dict.update(dz_multiples=sorted(dz_multiples), n_z=n_z_list, D3000=D3000_vals,
+                      ksz_map_rms=rms_vals,
                       chi_eff=chi_eff, z_lo=z_lo, z_hi=z_hi,
                       d3000_direct_matched=d3000_direct_matched)
     np.savez(summary_path, **save_dict)

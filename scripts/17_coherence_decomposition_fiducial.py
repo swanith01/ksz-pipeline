@@ -1,11 +1,28 @@
 #!/usr/bin/env python
 """
-Script 17: coherence decomposition, FIDUCIAL resolution.
+Script 17: coherence decomposition, FIDUCIAL resolution (with optional
+box-size override for the periodicity-vs-physics test).
 
 Scales script 16's quicktest logic up to full fiducial resolution
 (800 Mpc / 512^3, all 29 z_snapshots), per Girish's 2026-08-14 note.
 
-THREE THINGS ADDED beyond script 16's quicktest:
+BOX-SIZE OVERRIDE (added 2026-08-17, after the fiducial run showed a
+P_off spike at Delta-chi ~830 Mpc, suspiciously close to BOX_LEN=800):
+--box-len/--hii-dim let you rerun at a DIFFERENT box size while keeping
+cell size (dx) IDENTICAL to fiducial (so resolution isn't also changing
+at the same time -- box size is isolated as the only varied axis). If
+the Delta-chi bump moves proportionally with BOX_LEN, that's strong
+evidence of a periodicity/box-reuse artifact, not real physics; if it
+stays fixed in physical Mpc regardless of box size, that argues for
+something real. chi_eff/z_lo/z_hi are reused from closure_test.npz
+regardless of box size (these are LOS/redshift-only quantities,
+independent of the transverse box size) -- but the coeval-direct
+REFERENCE curve is recomputed fresh at the overridden box/resolution
+(reusing coeval_sweep.run_one_config, same as script 16's quicktest),
+since P_qperp genuinely depends on box size/resolution and
+closure_test.npz's own Dl_direct is fiducial-specific.
+
+THREE THINGS ADDED beyond script 16's quicktest, at fiducial defaults:
 1. SNAPSHOT-LEVEL GROUPING (group_slices_by_snapshot) before the P_diag/
    P_off split -- "diagonal" now means what it means for coeval-direct
    (one unit per snapshot's full box depth), not per thin LOS pixel.
@@ -66,12 +83,20 @@ from ksz_pipeline.ksz.coherence_decomposition import (compute_ksz_map_per_slice,
 from ksz_pipeline.utils.constants import ne0_cgs, MPC_CM
 
 
-def main(config_path, seed_for_shift):
+def main(config_path, seed_for_shift, box_len_override, hii_dim_override):
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
     sim_cfg = cfg['21cmfast']
-    BOX_LEN = sim_cfg['BOX_LEN']
-    HII_DIM = sim_cfg['HII_DIM_coeval']
+    BOX_LEN = box_len_override if box_len_override is not None else sim_cfg['BOX_LEN']
+    HII_DIM = hii_dim_override if hii_dim_override is not None else sim_cfg['HII_DIM_coeval']
+    is_fiducial_config = (BOX_LEN == sim_cfg['BOX_LEN'] and HII_DIM == sim_cfg['HII_DIM_coeval'])
+    dx_fiducial = sim_cfg['BOX_LEN'] / sim_cfg['HII_DIM_coeval']
+    dx_this_run = BOX_LEN / HII_DIM
+    if abs(dx_this_run - dx_fiducial) > 1e-6:
+        print(f"WARNING: this run's dx={dx_this_run:.4f} Mpc differs from "
+              f"fiducial's dx={dx_fiducial:.4f} Mpc -- resolution is NOT held "
+              f"fixed, so box size is not isolated as the only varied axis. "
+              f"If testing the periodicity hypothesis, pick HII_DIM so dx matches.\n")
     z_min, z_max = sim_cfg['z_min'], sim_cfg['z_max']
     z_snapshots = sorted(cfg['coeval_ksz']['z_snapshots'])
     cache_dir = cfg['data']['cache_dir']   # SAME as fiducial -- deliberate, for cache-hit
@@ -80,11 +105,13 @@ def main(config_path, seed_for_shift):
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(plot_dir, exist_ok=True)
 
-    print(f"FIDUCIAL coherence decomposition -- BOX_LEN={BOX_LEN} Mpc, "
-          f"HII_DIM={HII_DIM}, {len(z_snapshots)} z_snapshots.")
+    tag_suffix = "" if is_fiducial_config else f"_box{int(BOX_LEN)}"
+    print(f"Coherence decomposition -- BOX_LEN={BOX_LEN} Mpc, "
+          f"HII_DIM={HII_DIM} (dx={dx_this_run:.4f} Mpc), {len(z_snapshots)} z_snapshots. "
+          f"{'FIDUCIAL config.' if is_fiducial_config else 'BOX-SIZE OVERRIDE -- periodicity test run.'}")
 
-    # ---- load the trusted matched window, chi_eff, and direct D_ell
-    # from the closure test (script 14) -- reused, not recomputed. ----
+    # ---- load the matched window + chi_eff from the closure test (script 14) --
+    # these are LOS/redshift-only quantities, reused regardless of box size. ----
     closure_path = f"{out_dir}/closure_test.npz"
     if not os.path.exists(closure_path):
         raise FileNotFoundError(
@@ -92,10 +119,27 @@ def main(config_path, seed_for_shift):
     closure = np.load(closure_path)
     chi_eff = float(closure['chi_eff'])
     z_lo, z_hi = float(closure['z_lo']), float(closure['z_hi'])
-    ell_direct, Dl_direct = closure['ell_direct'], closure['Dl_direct']
+
+    if is_fiducial_config:
+        # Reuse script 14's own trusted direct curve directly.
+        ell_direct, Dl_direct = closure['ell_direct'], closure['Dl_direct']
+    else:
+        # Box size differs -- coeval-direct's own P_qperp depends on box
+        # size/resolution, so recompute a FRESH direct reference at THIS
+        # run's own (BOX_LEN, HII_DIM), same as script 16's quicktest does.
+        print(f"Computing a FRESH coeval-direct reference at BOX_LEN={BOX_LEN}, "
+              f"HII_DIM={HII_DIM} (closure_test.npz's own Dl_direct is fiducial-"
+              f"specific, not reusable here)...")
+        from ksz_pipeline.convergence.coeval_sweep import run_one_config as run_coeval_one_config
+        direct = run_coeval_one_config(BOX_LEN, HII_DIM, z_snapshots, cache_dir,
+                                        tag=f"coherence_direct{tag_suffix}",
+                                        N_THREADS=sim_cfg['N_THREADS'],
+                                        random_seed=sim_cfg['random_seed'])
+        ell_direct, Dl_direct = direct['ells_direct'], direct['Dl_direct']
+
     d3000_direct = float(np.interp(3000, ell_direct, Dl_direct))
     print(f"Matched window z=[{z_lo:.2f},{z_hi:.2f}], chi_eff={chi_eff:.1f} Mpc "
-          f"(from closure_test.npz) -- direct D_3000={d3000_direct:.4g} uK^2\n")
+          f"-- direct D_3000={d3000_direct:.4g} uK^2\n")
 
     # ================================================================
     # stitched fields, fiducial scale, SAME cache_dir as everything
@@ -252,11 +296,12 @@ def main(config_path, seed_for_shift):
     ax2.legend(fontsize=9)
 
     plt.tight_layout()
-    plot_path = f"{plot_dir}/coherence_decomposition_fiducial.png"
+    plot_path = f"{plot_dir}/coherence_decomposition{tag_suffix or '_fiducial'}.png"
     fig.savefig(plot_path, dpi=130, bbox_inches='tight')
     print(f"\nSaved -> {plot_path}")
 
-    np.savez(f"{out_dir}/coherence_decomposition_fiducial.npz",
+    np.savez(f"{out_dir}/coherence_decomposition{tag_suffix or '_fiducial'}.npz",
+              box_len=BOX_LEN, hii_dim=HII_DIM,
               ell_direct=ell_direct, Dl_direct=Dl_direct, d3000_direct=d3000_direct,
               ell_dec=ell_dec, Dl_total=Dl_total, Dl_diag=Dl_diag, Dl_off=Dl_off,
               ell_shift=ell_shift, Dl_total_shift=Dl_total_shift,
@@ -264,12 +309,19 @@ def main(config_path, seed_for_shift):
               dchi_centers=dchi_c, cross_mean=cross_mean, cross_std=cross_std, n_pairs=n_pairs,
               cross_mean_shifted=cross_mean_s, cross_std_shifted=cross_std_s,
               chi_eff=chi_eff, z_lo=z_lo, z_hi=z_hi, seed_for_shift=seed_for_shift)
-    print(f"Saved -> {out_dir}/coherence_decomposition_fiducial.npz")
+    print(f"Saved -> {out_dir}/coherence_decomposition{tag_suffix or '_fiducial'}.npz")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/fiducial.yaml")
     parser.add_argument("--shift-seed", type=int, default=42)
+    parser.add_argument("--box-len", type=float, default=None,
+                         help="Override BOX_LEN for the periodicity test -- "
+                              "pick --hii-dim so dx matches fiducial's own "
+                              "(e.g. --box-len 400 --hii-dim 256, since "
+                              "fiducial is 800/512, same dx=1.5625 Mpc)")
+    parser.add_argument("--hii-dim", type=int, default=None,
+                         help="Override HII_DIM -- see --box-len")
     args = parser.parse_args()
-    main(args.config, args.shift_seed)
+    main(args.config, args.shift_seed, args.box_len, args.hii_dim)

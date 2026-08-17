@@ -33,16 +33,33 @@ Design choices, and why:
   own a2_mid (0.5*(z_i+z_{i+1})), via stitch_from_coeval.comoving_distance_mpc,
   for consistency with chi_eff and every other chi computed this session.
 
-MEMORY WARNING: this keeps ALL per-slice 2D arrays in memory
-simultaneously (shape Nx, Ny, Nz-1). At full fiducial resolution
-(512x512x~2320), that is ~9.9 TB in complex128 -- completely infeasible.
-This module is intended for QUICK, LOW-RESOLUTION tests only (small
-HII_DIM, e.g. 16-32) until a snapshot-grouped or online/incremental
-version is written for a full-resolution cluster run. See script 16.
+MEMORY (CORRECTED 2026-08-14, was wrongly stated as ~9.9 TB in an earlier
+version -- that was a units error): at full fiducial resolution
+(512x512x~2320), theta_hat (complex128) is ~9.7 GB. Including theta_slices
+and its zeroed copy (real float64, ~4.9 GB each) held simultaneously in
+decompose_p_total_diag_off, peak memory there is closer to ~20 GB.
+compute_ksz_map_per_slice's own inputs (density_1plus, x_HII_field,
+v_los_Mpc_s, visibility_3D, patchy_mask_3D, all real float64 at full
+res, ~4.9 GB each) push the pipeline's overall peak higher, roughly
+30-50 GB across the full run -- still comfortably within the 125-515 GB
+node memory seen on this cluster. NOT a hard blocker for a full-resolution
+run, contrary to the earlier (wrong) TB estimate.
 
-cross_power_by_dchi() is similarly O(Nz^2) pairs -- fine for a quick
-test (Nz ~ 100s), NOT fine at full resolution (Nz ~ 2320, ~2.7M pairs)
-without a coarser grouping first.
+That said, nothing here is written as an incremental/streaming
+accumulator (compute one slice's FFT, add its |.|^2 to a running P_diag
+total, discard, move to the next slice) the way the advisor specifically
+suggested for P_diag -- everything currently materializes the full
+(Nx,Ny,Nz) array at once. Given the corrected memory math above, this is
+a deliberate scope choice (simpler code, fits comfortably in memory on
+the nodes available), not a necessity -- worth revisiting if this is
+ever run on a smaller-memory node, or just to follow the advisor's
+suggestion literally.
+
+cross_power_by_dchi() is a SEPARATE cost concern from memory -- it's
+O(Nz^2) PAIRS in a pure-Python loop. Fine once fed snapshot-grouped
+slices (Nz~15-29, trivial). NOT fine fed raw thin LOS pixels at full
+resolution (Nz~2320, ~2.7M pairs -- would be prohibitively slow, not
+just memory-heavy). Always call it on group_slices_by_snapshot's output.
 """
 import numpy as np
 
@@ -164,6 +181,71 @@ def decompose_p_total_diag_off(theta_slices, box_len_mpc, chi_Mpc, n_kbins=35):
     return ell_out, Dl_total, Dl_diag, Dl_off
 
 
+def group_slices_by_snapshot(theta_slices, chi_mid_mpc, z_snapshots):
+    """
+    Sum thin LOS-pixel slices into thicker groups, one per z_snapshot,
+    so 'diagonal' matches what coeval-direct's own per-snapshot P_qperp
+    treats as diagonal (each snapshot's full box depth, not each thin
+    LOS pixel). Bucket boundaries = comoving-distance midpoints between
+    adjacent sorted z_snapshots.
+
+    FIXED: outer edges now guaranteed to bound chi_mid_mpc's ACTUAL
+    range, not just z_snapshots' own range -- z_arr (and therefore
+    chi_mid_mpc) intentionally extends beyond z_snapshots with margin
+    (see stitch_from_coeval's own docstring), so without this fix, LOS
+    pixels in that margin would silently fall outside [lo,hi] and get
+    DROPPED from every group, with no warning. Now hard-fails instead
+    of silently losing data if this is ever violated.
+    """
+    z_sorted = sorted(z_snapshots)
+    chi_snap = np.array([comoving_distance_mpc(z) for z in z_sorted])
+    if len(chi_snap) > 1:
+        lo = chi_snap[0] - (chi_snap[1] - chi_snap[0]) / 2
+        hi = chi_snap[-1] + (chi_snap[-1] - chi_snap[-2]) / 2
+    else:
+        lo, hi = chi_snap[0] - 1, chi_snap[0] + 1
+    # Guarantee coverage of the ACTUAL LOS pixel range -- see FIXED note.
+    lo = min(lo, float(chi_mid_mpc.min()) - 1e-6)
+    hi = max(hi, float(chi_mid_mpc.max()) + 1e-6)
+    edges = np.sort(np.concatenate(([lo], 0.5 * (chi_snap[:-1] + chi_snap[1:]), [hi])))
+    digit = np.digitize(chi_mid_mpc, edges)
+
+    grouped, chi_grouped = [], []
+    n_used = 0
+    for g in range(1, len(edges)):
+        mask = digit == g
+        if np.any(mask):
+            grouped.append(theta_slices[:, :, mask].sum(axis=-1))
+            chi_grouped.append(chi_mid_mpc[mask].mean())
+            n_used += int(mask.sum())
+    if n_used != theta_slices.shape[-1]:
+        raise RuntimeError(
+            f"group_slices_by_snapshot: {theta_slices.shape[-1] - n_used} of "
+            f"{theta_slices.shape[-1]} LOS pixels were not assigned to any group "
+            f"-- bucket edges do not cover the full chi_mid_mpc range. This is a "
+            f"bug to fix, not a warning to ignore.")
+    return np.stack(grouped, axis=-1), np.array(chi_grouped)
+
+
+def random_shift_slices(theta_slices, seed=None):
+    """
+    Independent random cyclic (toroidal) shift per slice in (x,y).
+    Preserves each slice's OWN power spectrum exactly (translation is a
+    pure Fourier phase rotation) -- destroys any FIXED cross-slice
+    spatial alignment, e.g. periodicity-induced correlation from
+    stitching identical/correlated box copies at zero relative offset.
+    Advisor's requested control: breaks artificial periodic coherence,
+    preserves per-slice power.
+    """
+    rng = np.random.default_rng(seed)
+    Nx, Ny, Nz = theta_slices.shape
+    shifted = np.empty_like(theta_slices)
+    for i in range(Nz):
+        dx, dy = int(rng.integers(0, Nx)), int(rng.integers(0, Ny))
+        shifted[:, :, i] = np.roll(theta_slices[:, :, i], shift=(dx, dy), axis=(0, 1))
+    return shifted
+
+
 def cross_power_by_dchi(theta_slices, chi_mid_mpc, box_len_mpc, n_dchi_bins=20):
     """
     Pairwise real-space cross-correlation between every pair of slices
@@ -176,7 +258,13 @@ def cross_power_by_dchi(theta_slices, chi_mid_mpc, box_len_mpc, n_dchi_bins=20):
 
     (factor of 2 for the (i,j)+(j,i) terms, equal for a real-valued map)
 
-    COST WARNING: O(Nz^2) pairs -- see module docstring.
+    COST WARNING: O(Nz^2) pairs -- fine once fed SNAPSHOT-GROUPED slices
+    (Nz~15-29, a few hundred pairs). NOT fine fed raw thin LOS pixels at
+    full resolution (Nz~2320, ~2.7M pairs) -- that is a pure-Python
+    double loop and would be prohibitively SLOW (not just memory-heavy),
+    independent of the earlier memory correction. ALWAYS call this on
+    group_slices_by_snapshot's output at full resolution, never on the
+    raw per-pixel theta_slices.
 
     Returns
     -------

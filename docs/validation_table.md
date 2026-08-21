@@ -261,6 +261,31 @@ construction."
 single-pass replication of the Limber sum, and it matched the trusted
 `compute_cell` output to 0.06% (1.7812 vs. 1.7822).
 
+**Scope of what (b) actually tests — added 2026-08-18, after a Slack
+discussion clarified this was being over-read.** `compute_cell` and
+script 11 compute the SAME physical quantity (the Limber sum) via two
+separately-written code paths — this catches CODING bugs (typos,
+off-by-one, wrong array indexing, a variable reused incorrectly), which
+is exactly the category every bug actually found this session falls
+into (the reversed-array chi bug, the hardcoded chi_Mpc=7800 default,
+the missed ne0 fix in one file, the results-vs-results_subset caching
+bug). It does NOT independently test whether the Limber approximation
+itself, or this codebase's specific implementation choices, are the
+right physics — both paths share the same underlying assumptions, so a
+shared conceptual error would reproduce identically in both and this
+check would not catch it. Confidence in the physics itself rests on the
+external comparison in §1b/§4 (Georgiev+24, SPT-3G, ACT DR6, Reichardt+2021),
+not on this self-check.
+
+| | `compute_cell` (limber.py) | script 11 (audit) |
+|---|---|---|
+| Role | Production function — used by script 14, every convergence sweep, scripts 18/19 | One-off audit tool; `per_z_D3000_contributions` later reused for per-redshift breakdown plots |
+| Output | Full ell curve (80 points) + errors, one call | Per-redshift contribution, cumulative-summed to one checkpoint |
+| ell range checked | Native, full resolved range | Only ever verified at ell=3000 (D_3000) — full-curve agreement not separately confirmed |
+| Weighting | dchi via `np.gradient` over the full 29-z grid | Same `np.gradient` weighting, computed once on the full grid, kept per-redshift instead of immediately summed |
+| Bug it caught (in itself) | — | An earlier draft called `compute_cell` on shrinking z-subsets repeatedly; `np.gradient` gave inconsistent weights each time since it depends on neighboring points. Caught and fixed before results were trusted (see Audit Methodology notes below). |
+| Unique benefit | Fast, single trusted call, ground truth downstream | Exposes per-redshift contribution — the thing that made the dD_3000/dz diagnostics in §1b possible at all |
+
 **(c) Independent full-map RMS agreement.** Script 03 (fiducial stitched
 run, job B) and script 08 (validation diagnostics, job C) — two separate
 scripts, two separate processes — both independently computed the stitched

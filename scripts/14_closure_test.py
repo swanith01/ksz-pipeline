@@ -267,6 +267,15 @@ def main(config_path):
     ell_s, Dl_s, Dl_s_err = ksz_map_to_Dl(ksz_full_window, BOX_LEN, chi_Mpc=chi_eff)
     ell_ratio, ratio = ratio_on_common_grid(ell_d, Dl_d, ell_s, Dl_s)
 
+    # Save the actual 2D map -- windowed, current-resolution, chi_eff-
+    # consistent -- previously NOT persisted anywhere; only Dl curves
+    # were saved. Needed for arcmin/real-space figures at fiducial (512^3)
+    # resolution, since the only .npy on disk predates this session
+    # entirely (128^3, unwindowed).
+    np.save(f"{out_dir}/ksz_map_windowed_fiducial.npy", ksz_full_window)
+    print(f"Saved -> {out_dir}/ksz_map_windowed_fiducial.npy "
+          f"(shape={ksz_full_window.shape}, windowed z=[{z_lo:.2f},{z_hi:.2f}])")
+
     # ================================================================
     # 4b. D_3000 under all three chi candidates, same map -- cheap,
     # reuses ksz_full_window, just re-runs the ell<->k conversion.

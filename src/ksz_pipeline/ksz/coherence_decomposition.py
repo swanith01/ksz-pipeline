@@ -227,6 +227,57 @@ def group_slices_by_snapshot(theta_slices, chi_mid_mpc, z_snapshots):
     return np.stack(grouped, axis=-1), np.array(chi_grouped)
 
 
+def group_slices_uniform(theta_slices, chi_mid_mpc, n_groups):
+    """
+    Sum thin LOS-pixel slices into n_groups EQUAL-WIDTH comoving-distance
+    bins spanning the full chi_mid_mpc range -- unlike
+    group_slices_by_snapshot, NOT tied to actual simulation snapshot
+    boundaries. Purpose: test whether P_diag's value depends on the
+    specific choice of grouping into 26 snapshot-matched groups (per
+    Girish's 2026-08-18 request), by sweeping n_groups independently of
+    where real snapshots happen to sit.
+
+    IMPORTANT, worth understanding before reading a sweep's results:
+    P_diag is NOT expected to converge to a single value as n_groups
+    grows without bound. P_total = P_diag + P_off always holds
+    (grouping-invariant -- same map, just summed in a different order),
+    so finer grouping structurally moves real correlation OUT of P_diag
+    and INTO P_off by construction (more, thinner groups -> more
+    distinct pairs -> more terms counted as cross- rather than
+    self-power). P_diag should DECREASE monotonically as n_groups grows,
+    toward some floor (already seen: the fully-ungrouped, per-native-
+    pixel case gives a P_diag well below direct, 31-56% low depending
+    on scale/resolution tested). The meaningful question is whether
+    there's a PLATEAU in a reasonable range around n_groups=26 -- a
+    stable region where P_diag doesn't change much -- which would mean
+    the 8.5% match at n_groups=26 is robust, not a coincidence tied to
+    that exact number.
+
+    Returns
+    -------
+    grouped, chi_grouped : same shape convention as group_slices_by_snapshot
+    """
+    lo = float(chi_mid_mpc.min())
+    hi = float(chi_mid_mpc.max()) + 1e-6  # ensure the max value falls inside the last bin
+    edges = np.linspace(lo, hi, n_groups + 1)
+    digit = np.digitize(chi_mid_mpc, edges)
+
+    grouped, chi_grouped = [], []
+    n_used = 0
+    for g in range(1, n_groups + 1):
+        mask = digit == g
+        if np.any(mask):
+            grouped.append(theta_slices[:, :, mask].sum(axis=-1))
+            chi_grouped.append(chi_mid_mpc[mask].mean())
+            n_used += int(mask.sum())
+    if n_used != theta_slices.shape[-1]:
+        raise RuntimeError(
+            f"group_slices_uniform: {theta_slices.shape[-1] - n_used} of "
+            f"{theta_slices.shape[-1]} LOS pixels were not assigned to any group "
+            f"-- bug in bin-edge construction, not a warning to ignore.")
+    return np.stack(grouped, axis=-1), np.array(chi_grouped)
+
+
 def random_shift_slices(theta_slices, seed=None):
     """
     Independent random cyclic (toroidal) shift per slice in (x,y).

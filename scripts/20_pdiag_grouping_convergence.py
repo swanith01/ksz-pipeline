@@ -122,6 +122,7 @@ def main(config_path):
     n_groups_list = [n for n in N_GROUPS_SWEEP if n <= theta_slices.shape[-1]]
 
     d3000_total_vals, d3000_diag_vals = [], []
+    curves = {}  # n_groups -> (ell_dec, Dl_diag) -- full curves, for overlay plots
     print(f"{'n_groups':>10} {'mean thickness [Mpc]':>22} {'D_3000 total':>14} {'D_3000 diag':>13}")
     for n_groups in n_groups_list:
         theta_grouped, chi_grouped = group_slices_uniform(theta_slices, chi_mid_mpc, n_groups)
@@ -131,6 +132,7 @@ def main(config_path):
         d3000_diag  = float(np.interp(3000, ell_dec, Dl_diag))
         d3000_total_vals.append(d3000_total)
         d3000_diag_vals.append(d3000_diag)
+        curves[n_groups] = (ell_dec.copy(), Dl_diag.copy())
         mean_thickness = (float(chi_mid_mpc.max()) - float(chi_mid_mpc.min())) / n_groups
         print(f"{n_groups:>10} {mean_thickness:>22.2f} {d3000_total:>14.4g} {d3000_diag:>13.4g}")
         del theta_grouped
@@ -182,11 +184,16 @@ def main(config_path):
     fig.savefig(plot_path, dpi=140, bbox_inches='tight')
     print(f"\nSaved -> {plot_path}")
 
-    np.savez(f"{out_dir}/pdiag_grouping_convergence.npz",
-              n_groups=n_groups_list, d3000_total=d3000_total_vals,
-              d3000_diag=d3000_diag_vals, d3000_direct=d3000_direct,
-              chi_eff=chi_eff, z_lo=z_lo, z_hi=z_hi)
-    print(f"Saved -> {out_dir}/pdiag_grouping_convergence.npz")
+    save_dict = dict(n_groups=n_groups_list, d3000_total=d3000_total_vals,
+                      d3000_diag=d3000_diag_vals, d3000_direct=d3000_direct,
+                      chi_eff=chi_eff, z_lo=z_lo, z_hi=z_hi)
+    for n_groups in n_groups_list:
+        ell_dec, Dl_diag = curves[n_groups]
+        save_dict[f"ell_n{n_groups}"] = ell_dec
+        save_dict[f"Dl_diag_n{n_groups}"] = Dl_diag
+    np.savez(f"{out_dir}/pdiag_grouping_convergence.npz", **save_dict)
+    print(f"Saved -> {out_dir}/pdiag_grouping_convergence.npz "
+          f"(includes full ell/Dl_diag curves per n_groups, keyed as 'ell_n<N>'/'Dl_diag_n<N>')")
 
 
 if __name__ == "__main__":

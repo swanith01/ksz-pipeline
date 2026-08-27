@@ -297,6 +297,124 @@ def random_shift_slices(theta_slices, seed=None):
     return shifted
 
 
+def _interp_ell_signed(ell_q, ell_p, y_p):
+    """Interpolate possibly-NEGATIVE y-values vs ell, using log(ell) as
+    the x-axis (monotonic, fine even though y isn't all positive --
+    plain loglog_interp can't be used since P_off/D_ell CAN be
+    negative). Returns NaN outside [ell_p.min(), ell_p.max()] --
+    deliberately NOT extrapolated, since a given pair's own k-range
+    only maps to a limited ell range through its own chi_ij; treating
+    it as contributing 0 outside that range (see caller) is the
+    physically correct choice, not an artifact to paper over.
+    """
+    ell_p = np.asarray(ell_p); y_p = np.asarray(y_p)
+    order = np.argsort(ell_p)
+    return np.interp(np.log(ell_q), np.log(ell_p[order]), y_p[order],
+                      left=np.nan, right=np.nan)
+
+
+def decompose_off_pairwise_chi(theta_slices, chi_mid_mpc, box_len_mpc,
+                                n_kbins=35, n_ell_out=40):
+    """
+    P_off, but converting EACH (i,j) pair's own k-space cross-term to
+    ell using that PAIR's own effective distance chi_ij = sqrt(chi_i *
+    chi_j) -- instead of decompose_p_total_diag_off's single shared
+    chi_eff for the whole map.
+
+    RECTILINEAR CAVEAT, discussed and deliberately accepted (not a
+    Limber-style non-Limber projection): this does NOT implement
+    Alvarez et al. (2016, arXiv:1511.02846) equations (4)/(5)/(8), the
+    true spherical/Bessel-function non-Limber treatment, where a single
+    3D k-mode maps to a RANGE of ell via j_ell(k*chi) (peaked near
+    ell~k*chi but with real tails), not a single ell = k*chi. That
+    requires genuinely angular geometry -- a full lightcone rebuild,
+    out of scope here (see lightcone_integral.py's own docstring
+    pointer to an angular_lightcone.py / angular_ksz_map_to_Dl that may
+    exist but has not been located/verified this session). This
+    function stays entirely inside the existing rectilinear/flat-sky
+    pixel-grid framework: correlations only exist between MATCHING k in
+    a flat, translation-invariant plane (theta_i_hat(k) only correlates
+    with theta_j_hat(k), never a different k' -- that part is already
+    correct upstream). What this fixes is narrower: every pair used to
+    be converted to ell through ONE shared chi_eff for the whole map,
+    which is wrong for pairs far from that reference distance. Using
+    chi_ij per pair is a real, honest improvement within the flat-sky
+    approximation -- not a substitute for the full spherical treatment.
+
+    Each pair's P(k)->D_ell conversion (chi_ij used for BOTH the
+    ell=k*chi_ij mapping AND the Cl=P/chi_ij^2 amplitude normalization,
+    for internal self-consistency) is done fully in that pair's own
+    frame BEFORE interpolating onto the shared output ell grid -- not
+    the other way around (converting in a shared frame first would
+    reintroduce the same single-chi assumption this function exists to
+    remove).
+
+    Returns
+    -------
+    ell_out    : ndarray, shared output multipole grid
+    Dl_off_pairwise : ndarray, D_ell (uK^2) -- CAN BE NEGATIVE, summed
+                 across all pairs' own contributions at each ell (pairs
+                 whose own ell range doesn't reach a given output bin
+                 contribute 0 there, not extrapolated)
+    n_pairs_used : int, sanity check -- should equal Nz*(Nz-1)/2 for a
+                 well-behaved run; fewer means many pairs had degenerate
+                 chi_i~chi_j and got dropped, worth knowing
+    """
+    T_CMB_uK = T_CMB_K * 1e6
+    Nx, Ny, Nz = theta_slices.shape
+    N = Nx
+    pix_Mpc = box_len_mpc / N
+
+    theta_zeroed = theta_slices - theta_slices.mean(axis=(0, 1), keepdims=True)
+    theta_hat = np.fft.fftshift(np.fft.fft2(theta_zeroed, axes=(0, 1)), axes=(0, 1))
+    norm = (pix_Mpc / N) ** 2
+
+    dk = 2.0 * np.pi / (N * pix_Mpc)
+    kx = np.fft.fftshift(np.fft.fftfreq(N)) * N * dk
+    ky = np.fft.fftshift(np.fft.fftfreq(N)) * N * dk
+    kg = np.sqrt(kx[:, None] ** 2 + ky[None, :] ** 2)
+
+    k_bins    = np.logspace(np.log10(dk), np.log10(kg.max() * 0.9), n_kbins)
+    k_centers = 0.5 * (k_bins[:-1] + k_bins[1:])
+    digit_k   = np.digitize(kg.ravel(), k_bins)
+
+    def _bin_k(arr2d):
+        out = np.full(len(k_centers), np.nan)
+        flat = arr2d.ravel()
+        for i in range(len(k_centers)):
+            mask = digit_k == i + 1
+            if np.any(mask):
+                out[i] = flat[mask].mean()
+        return out
+
+    chi_lo, chi_hi = float(chi_mid_mpc.min()), float(chi_mid_mpc.max())
+    chi_axis_ref = np.sqrt(chi_lo * chi_hi)  # axis bounds/labeling ONLY
+    ell_out = np.logspace(np.log10(k_centers.min() * chi_axis_ref * 0.5),
+                           np.log10(k_centers.max() * chi_axis_ref * 1.5), n_ell_out)
+
+    Dl_off_accum = np.zeros(n_ell_out)
+    n_pairs_used = 0
+    for i in range(Nz):
+        for j in range(i + 1, Nz):
+            cross_2d = norm * 2.0 * np.real(theta_hat[:, :, i] * np.conj(theta_hat[:, :, j]))
+            P1d_k = _bin_k(cross_2d)
+            chi_ij = np.sqrt(chi_mid_mpc[i] * chi_mid_mpc[j])
+
+            ell_this_pair = k_centers * chi_ij
+            Cl_this_pair  = P1d_k / chi_ij ** 2
+            fac_this_pair = ell_this_pair * (ell_this_pair + 1.0) / (2.0 * np.pi) * T_CMB_uK ** 2
+            Dl_this_pair  = Cl_this_pair * fac_this_pair
+
+            valid = ~np.isnan(Dl_this_pair) & (ell_this_pair > 1)
+            if valid.sum() < 2:
+                continue
+            Dl_on_common = _interp_ell_signed(ell_out, ell_this_pair[valid], Dl_this_pair[valid])
+            Dl_off_accum += np.nan_to_num(Dl_on_common, nan=0.0)
+            n_pairs_used += 1
+
+    return ell_out, Dl_off_accum, n_pairs_used
+
+
 def cross_power_by_dchi(theta_slices, chi_mid_mpc, box_len_mpc, n_dchi_bins=20):
     """
     Pairwise real-space cross-correlation between every pair of slices

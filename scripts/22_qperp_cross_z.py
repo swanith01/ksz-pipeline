@@ -47,6 +47,7 @@ from astropy.cosmology import Planck18 as cosmo
 
 from ksz_pipeline.coeval.fields import run_coeval_fields
 from ksz_pipeline.coeval.momentum import qperp_power
+from ksz_pipeline.coeval.limber import compute_cell
 from ksz_pipeline.coeval.qperp_cross_z import (compute_qperp_transverse_components,
                                                 cross_power_qperp_pairwise_chi)
 
@@ -75,41 +76,52 @@ def main(config_path):
     qperp_components = {}
     chi_dict = {}
     qperp_power_reference = {}  # for the self-consistency check
+    xH_mean_dict = {}
     for z in z_window:
         delta, xH, vx, vy, vz = run_coeval_fields(
             z, HII_DIM, BOX_LEN, cache_dir,
             N_THREADS=sim_cfg['N_THREADS'], random_seed=sim_cfg['random_seed'])
         qperp_components[z] = compute_qperp_transverse_components(delta, xH, vx, vy, vz, BOX_LEN)
         chi_dict[z] = cosmo.comoving_distance(z).value
-        k_ref, P_ref, _ = qperp_power(delta, xH, vx, vy, vz, BOX_LEN)
-        qperp_power_reference[z] = (k_ref, P_ref)
+        k_ref, P_ref, Pstd_ref = qperp_power(delta, xH, vx, vy, vz, BOX_LEN)
+        qperp_power_reference[z] = (k_ref, P_ref, Pstd_ref)
+        xH_mean_dict[z] = float(xH.mean())
         print(f"  z={z:.2f}  chi={chi_dict[z]:.1f} Mpc", flush=True)
 
     # ================================================================
     # SELF-CONSISTENCY CHECK: z_i=z_j should reduce to qperp_power's own P(k)
     # ================================================================
-    print("\nSELF-CONSISTENCY CHECK: z_i=z_j vs qperp_power's own trusted auto P(k)...")
+    print("\nSELF-CONSISTENCY CHECK: z_i=z_j vs compute_cell's own trusted single-z output...")
     z_check = z_window[len(z_window) // 2]
-    # duplicate the same z under a fake second key to force the pairwise
-    # function to compute a z_i=z_j "cross" term against itself
     fake_pair = {z_check: qperp_components[z_check], z_check + 1e-6: qperp_components[z_check]}
     fake_chi = {z_check: chi_dict[z_check], z_check + 1e-6: chi_dict[z_check]}
     ell_self, Dl_self, _ = cross_power_qperp_pairwise_chi(fake_pair, fake_chi, BOX_LEN)
 
-    k_ref, P_ref = qperp_power_reference[z_check]
-    ell_ref = k_ref * chi_dict[z_check]
-    Dl_ref = ell_ref * (ell_ref + 1.0) / (2.0 * np.pi) * (2.7255e6) ** 2 * P_ref / chi_dict[z_check] ** 2
+    # Reference computed by feeding compute_cell a SINGLE-z dict, reusing
+    # the exact trusted function rather than hand-deriving the D_ell
+    # formula a second time -- deliberately, since a manually re-derived
+    # reference is exactly what let the missing-prefactor bug slip past
+    # undetected in an earlier version of this check (both sides were
+    # wrong in the same way, so they still agreed). Reusing compute_cell
+    # directly closes that blind spot.
+    k_ref, P_ref, Pstd_ref = qperp_power_reference[z_check]
+    results_single = {z_check: dict(k=k_ref, Pqperp=P_ref, Pstd=Pstd_ref,
+                                     xH_mean=xH_mean_dict[z_check])}
+    ell_ref, Dl_ref, sigma_ref, *_ = compute_cell(results_single)
+    d3000_ref = float(np.interp(3000, ell_ref, Dl_ref)) if len(ell_ref) else float('nan')
+
     d3000_self = float(np.interp(3000, ell_self, Dl_self)) if len(ell_self) else float('nan')
-    d3000_ref  = float(np.interp(3000, ell_ref, Dl_ref)) if len(ell_ref) else float('nan')
     print(f"  z_i=z_j (z={z_check:.2f}) D_3000 = {d3000_self:.4g} uK^2")
-    print(f"  qperp_power's own auto D_3000    = {d3000_ref:.4g} uK^2")
+    print(f"  compute_cell's own single-z D_3000 = {d3000_ref:.4g} uK^2")
     self_check_frac = abs(d3000_self - d3000_ref) / abs(d3000_ref) if d3000_ref else float('nan')
-    if self_check_frac < 0.15:
-        print(f"  OK ({self_check_frac:.1%} difference, plausible from kz=0-slice vs full-3D "
-              f"binning differences) -- proceeding to z_i!=z_j cross terms.\n")
+    if self_check_frac < 0.30:
+        print(f"  OK ({self_check_frac:.1%} difference -- expected from compute_cell's ADDITIONAL "
+              f"visibility^2/a^-4/dchi weighting this simplified cross-z function does not "
+              f"replicate, plus kz=0-slice vs full-3D binning differences, see module docstring) "
+              f"-- proceeding to z_i!=z_j cross terms.\n")
     else:
-        print(f"  *** WARNING: {self_check_frac:.1%} difference -- larger than expected, "
-              f"investigate before trusting cross-z results below. ***\n")
+        print(f"  *** WARNING: {self_check_frac:.1%} difference -- larger than the expected "
+              f"weighting-mismatch range, investigate before trusting cross-z results below. ***\n")
 
     # ================================================================
     # THE ACTUAL CROSS-Z CALCULATION

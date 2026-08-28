@@ -33,16 +33,21 @@ chi_ij = sqrt(chi_i*chi_j) pairwise projection as
 coherence_decomposition.decompose_off_pairwise_chi. NOT the full
 spherical/Bessel-function non-Limber treatment.
 
-NORMALIZATION NOTE, flagged not silently assumed: the "/2" factor here
-mirrors momentum.qperp_power's own convention, which that module's own
-docstring states comes FROM the Limber approximation (Park+2013 Eq.A15).
-Reusing it here lets z_i=z_j reduce EXACTLY to qperp_power's own trusted
-auto-P(k) (a built-in sanity check, see driver script) -- but whether
-this exact factor is the correct one for a genuinely non-Limber cross
-quantity has not been independently re-derived. Treat absolute
-normalization with appropriate caution; the qualitative sign/shape and
-the z_i=z_j self-consistency check are more trustworthy than the precise
-amplitude.
+NORMALIZATION NOTE (CORRECTED 2026-08-27, was a real bug, not just a
+caveat): the first version of this module omitted the (sigma_T*ne0/c)^2
+physical prefactor entirely -- compute_cell applies this to convert raw
+momentum power [cm^2 s^-2 Mpc^3] into a dimensionless (Delta_T/T)^2
+quantity; the "/2" alone (mirroring qperp_power's own convention) is
+NOT that conversion. Omitting it produced D_3000 ~1e26-1e28 uK^2 instead
+of the physically sensible O(1) scale -- caught because the self-check
+in script 22 was rebuilt to compare against compute_cell's OWN output
+directly (not a hand-derived formula), which is far harder to fool with
+a missing global constant than the previous manual-formula comparison
+was. STILL NOT REPLICATED: compute_cell's per-z weight also includes
+visibility^2 * a^-4 * dchi_mpc (see limber.py) -- none of that is
+applied here. Treat this module's absolute amplitude as order-of-
+magnitude / qualitative, not precision-matched to compute_cell's full
+treatment.
 """
 import numpy as np
 
@@ -97,7 +102,7 @@ def compute_qperp_transverse_components(delta, xH, vx, vy, vz, BOX_LEN):
 
 
 def cross_power_qperp_pairwise_chi(qperp_components, chi_dict, box_len_mpc,
-                                    n_kbins=35, n_ell_out=40):
+                                    ne0=None, n_kbins=35, n_ell_out=40):
     """
     Cross-correlate every PAIR of z's q_perp transverse (kz=0) components
     (full vector dot product, not summed scalars), converting each pair
@@ -119,8 +124,16 @@ def cross_power_qperp_pairwise_chi(qperp_components, chi_dict, box_len_mpc,
                      as decompose_off_pairwise_chi
     n_pairs_used   : int
     """
-    from ..utils.constants import T_CMB_K
+    from ..utils.constants import T_CMB_K, SIGMA_T, C_CGS, MPC_CM, ne0_cgs
     from ..ksz.coherence_decomposition import _interp_ell_signed  # reuse, don't duplicate
+
+    if ne0 is None:
+        ne0 = ne0_cgs()
+    pref = (SIGMA_T * ne0 / C_CGS) ** 2  # [s^2 cm^-4] -- SAME prefactor compute_cell
+    # applies to convert raw momentum power into a dimensionless (Delta_T/T)^2
+    # quantity. THIS WAS MISSING in the first version of this function --
+    # its absence is exactly what produced ~1e26-1e28 uK^2 "results" instead
+    # of the physically sensible O(1) scale. See module docstring.
 
     T_CMB_uK = T_CMB_K * 1e6
     zs = sorted(qperp_components.keys())
@@ -165,7 +178,13 @@ def cross_power_qperp_pairwise_chi(qperp_components, chi_dict, box_len_mpc,
 
             chi_ij = np.sqrt(chi_dict[zi] * chi_dict[zj])
             ell_this_pair = k_centers * chi_ij
-            Cl_this_pair = P1d_k / chi_ij ** 2
+            Cl_this_pair = pref * P1d_k * MPC_CM ** 2 / chi_ij ** 2
+            # NOTE, honestly flagged rather than silently omitted: compute_cell's
+            # own per-z weight ALSO includes visibility^2 * a^-4 * dchi_mpc (see
+            # limber.py) -- none of that is replicated here. This function gives
+            # the right ORDER OF MAGNITUDE / qualitative cross-z signal, not a
+            # precision-matched normalization against compute_cell's full
+            # treatment. Treat absolute amplitude as approximate.
             fac_this_pair = ell_this_pair * (ell_this_pair + 1.0) / (2.0 * np.pi) * T_CMB_uK ** 2
             Dl_this_pair = Cl_this_pair * fac_this_pair
 

@@ -52,6 +52,31 @@ treatment.
 import numpy as np
 
 
+def diagonal_reference_dl(k, P, chi_Mpc, box_len_mpc=None, ne0=None):
+    """
+    D_ell for a SINGLE z's raw P(k) (e.g. qperp_power's own output),
+    using the EXACT SAME formula cross_power_qperp_pairwise_chi applies
+    to each pair's diagonal (z_i=z_j) case -- pref*P(k)*MPC_CM^2/chi^2,
+    NO visibility/a^-4/dchi weighting (deliberately, matching the
+    pairwise function's own scope -- see module docstring).
+
+    Exists so the self-check in script 22 calls this SAME function
+    rather than re-deriving the formula a third time -- a second
+    independent formula is exactly what let the missing-prefactor bug
+    slip past undetected the first time (see NORMALIZATION NOTE above).
+    """
+    from ..utils.constants import T_CMB_K, SIGMA_T, C_CGS, MPC_CM, ne0_cgs
+    if ne0 is None:
+        ne0 = ne0_cgs()
+    pref = (SIGMA_T * ne0 / C_CGS) ** 2
+    T_CMB_uK = T_CMB_K * 1e6
+
+    ell = np.asarray(k) * chi_Mpc
+    Cl = pref * np.asarray(P) * MPC_CM ** 2 / chi_Mpc ** 2
+    fac = ell * (ell + 1.0) / (2.0 * np.pi) * T_CMB_uK ** 2
+    return ell, Cl * fac
+
+
 def compute_qperp_transverse_components(delta, xH, vx, vy, vz, BOX_LEN):
     """
     Mirrors momentum.qperp_power's FFT/projection logic EXACTLY, up to

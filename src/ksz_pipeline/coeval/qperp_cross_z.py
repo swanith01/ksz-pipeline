@@ -126,7 +126,7 @@ def compute_qperp_transverse_components(delta, xH, vx, vy, vz, BOX_LEN):
     return Qx_perp_2d, Qy_perp_2d, Qz_perp_2d, kx_1d, kx_1d  # ky grid == kx grid
 
 
-def cross_power_qperp_pairwise_chi(qperp_components, chi_dict, box_len_mpc,
+def cross_power_qperp_pairwise_chi(qperp_components, chi_dict, xH_mean_dict, box_len_mpc,
                                     ne0=None, n_kbins=35, n_ell_out=40):
     """
     Cross-correlate every PAIR of z's q_perp transverse (kz=0) components
@@ -135,11 +135,28 @@ def cross_power_qperp_pairwise_chi(qperp_components, chi_dict, box_len_mpc,
     convention as coherence_decomposition.decompose_off_pairwise_chi,
     applied here to q_perp/coeval data instead of stitched theta data.
 
+    WEIGHTING (added 2026-08-28, after the first version's D_3000 came
+    back ~1e5x too small): each pair now carries a weight
+        w_ij = sqrt(vis2_i*vis2_j) / (a_i^2*a_j^2) * sqrt(dchi_i*dchi_j)
+    -- the GEOMETRIC MEAN of compute_cell's own diagonal per-z weight
+    (vis2/a^4 * dchi), chosen SPECIFICALLY because it reduces EXACTLY to
+    compute_cell's diagonal weight at i=j (sqrt(x*x)=x for x=vis2_i/a_i^4*dchi_i,
+    a mathematical identity, not an empirical coincidence -- true for any
+    non-negative vis2, dchi, which they always are). This is the same
+    generalization logic as chi_ij=sqrt(chi_i*chi_j) already uses for the
+    ell-conversion, extended to the remaining weighting factors.
+    dchi_i is computed via np.gradient over chi_dict's own sorted values;
+    vis2_i via the SAME tau-accumulation logic compute_cell uses internally
+    (mirrored here, not imported, to avoid compute_cell's own multi-z
+    np.gradient requirement -- see script 22's earlier crash).
+
     Parameters
     ----------
     qperp_components : dict {z: (Qx_perp_2d, Qy_perp_2d, Qz_perp_2d, kx, ky)}
         from compute_qperp_transverse_components, one entry per redshift
     chi_dict         : dict {z: chi_Mpc}
+    xH_mean_dict     : dict {z: xH_mean} -- needed for the tau/visibility
+        weighting (x_e = 1 - xH_mean)
     box_len_mpc       : float
 
     Returns
@@ -150,6 +167,7 @@ def cross_power_qperp_pairwise_chi(qperp_components, chi_dict, box_len_mpc,
     n_pairs_used   : int
     """
     from ..utils.constants import T_CMB_K, SIGMA_T, C_CGS, MPC_CM, ne0_cgs
+    from ..ksz.optical_depth import analytic_tau_below
     from ..ksz.coherence_decomposition import _interp_ell_signed  # reuse, don't duplicate
 
     if ne0 is None:
@@ -182,6 +200,23 @@ def cross_power_qperp_pairwise_chi(qperp_components, chi_dict, box_len_mpc,
                 out[i] = flat[mask].mean()
         return out
 
+    # ---- per-z weighting ingredients, mirroring compute_cell's own
+    # tau-accumulation loop exactly (limber.py), inlined here rather than
+    # calling compute_cell directly -- that function needs >=2 z's for
+    # its OWN internal np.gradient, which crashed the earlier self-check.
+    chi_arr = np.array([chi_dict[z] for z in zs])
+    dchi_arr = np.abs(np.gradient(chi_arr))
+    xe_arr = np.array([1.0 - xH_mean_dict[z] for z in zs])
+    a_arr = 1.0 / (1.0 + np.array(zs))
+
+    tau0 = analytic_tau_below(zs[0])
+    tau_arr = np.full(len(zs), tau0)
+    for i in range(len(zs) - 1):
+        zmid = 0.5 * (zs[i] + zs[i + 1])
+        xe_mid = 0.5 * (xe_arr[i] + xe_arr[i + 1])
+        tau_arr[i + 1] = tau_arr[i] + SIGMA_T * ne0 * xe_mid * (1.0 + zmid) ** 2 * (dchi_arr[i] * MPC_CM)
+    vis2_arr = np.exp(-2.0 * tau_arr)
+
     chi_lo, chi_hi = min(chi_dict.values()), max(chi_dict.values())
     chi_axis_ref = np.sqrt(chi_lo * chi_hi)
     ell_out = np.logspace(np.log10(k_centers.min() * chi_axis_ref * 0.5),
@@ -189,9 +224,9 @@ def cross_power_qperp_pairwise_chi(qperp_components, chi_dict, box_len_mpc,
 
     Dl_accum = np.zeros(n_ell_out)
     n_pairs_used = 0
-    for a in range(len(zs)):
-        for b in range(a + 1, len(zs)):
-            zi, zj = zs[a], zs[b]
+    for idx_a in range(len(zs)):
+        for idx_b in range(idx_a + 1, len(zs)):
+            zi, zj = zs[idx_a], zs[idx_b]
             Qxi, Qyi, Qzi, _, _ = qperp_components[zi]
             Qxj, Qyj, Qzj, _, _ = qperp_components[zj]
 
@@ -203,13 +238,18 @@ def cross_power_qperp_pairwise_chi(qperp_components, chi_dict, box_len_mpc,
 
             chi_ij = np.sqrt(chi_dict[zi] * chi_dict[zj])
             ell_this_pair = k_centers * chi_ij
-            Cl_this_pair = pref * P1d_k * MPC_CM ** 2 / chi_ij ** 2
-            # NOTE, honestly flagged rather than silently omitted: compute_cell's
-            # own per-z weight ALSO includes visibility^2 * a^-4 * dchi_mpc (see
-            # limber.py) -- none of that is replicated here. This function gives
-            # the right ORDER OF MAGNITUDE / qualitative cross-z signal, not a
+
+            # geometric-mean pair weight -- see docstring for the exact-at-i=j
+            # derivation. Factor of 2 accounts for the (i,j)+(j,i) symmetric
+            # pair (same convention as coherence_decomposition's off-diagonal
+            # sum) -- MISSING in the first version of this function.
+            w_pair = np.sqrt(vis2_arr[idx_a] * vis2_arr[idx_b]) / (a_arr[idx_a] ** 2 * a_arr[idx_b] ** 2) \
+                     * np.sqrt(dchi_arr[idx_a] * dchi_arr[idx_b])
+            Cl_this_pair = 2.0 * pref * P1d_k * MPC_CM ** 2 / chi_ij ** 2 * w_pair
+            # (previously: Cl_this_pair = pref * P1d_k * MPC_CM**2 / chi_ij**2 -- missing
+            # BOTH the w_pair weighting and the factor-of-2 symmetric-pair count. This
+            # is what produced D_3000 ~1e-5 uK^2 instead of a physically comparable scale.
             # precision-matched normalization against compute_cell's full
-            # treatment. Treat absolute amplitude as approximate.
             fac_this_pair = ell_this_pair * (ell_this_pair + 1.0) / (2.0 * np.pi) * T_CMB_uK ** 2
             Dl_this_pair = Cl_this_pair * fac_this_pair
 

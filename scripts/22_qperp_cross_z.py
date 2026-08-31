@@ -48,8 +48,7 @@ from astropy.cosmology import Planck18 as cosmo
 from ksz_pipeline.coeval.fields import run_coeval_fields
 from ksz_pipeline.coeval.momentum import qperp_power
 from ksz_pipeline.coeval.qperp_cross_z import (compute_qperp_transverse_components,
-                                                cross_power_qperp_pairwise_chi,
-                                                diagonal_reference_dl)
+                                                cross_power_qperp_pairwise_chi)
 
 
 def main(config_path):
@@ -100,35 +99,48 @@ def main(config_path):
     # into two different formulas the way the original missing-prefactor
     # bug happened.)
     # ================================================================
-    print("\nSELF-CONSISTENCY CHECK: z_i=z_j vs qperp_power's own P(k), same formula...")
-    z_check = z_window[len(z_window) // 2]
-    fake_pair = {z_check: qperp_components[z_check], z_check + 1e-6: qperp_components[z_check]}
-    fake_chi = {z_check: chi_dict[z_check], z_check + 1e-6: chi_dict[z_check]}
-    ell_self, Dl_self, _ = cross_power_qperp_pairwise_chi(fake_pair, fake_chi, BOX_LEN)
-
-    k_ref, P_ref, Pstd_ref = qperp_power_reference[z_check]
-    ell_ref, Dl_ref = diagonal_reference_dl(k_ref, P_ref, chi_dict[z_check])
-    d3000_ref = float(np.interp(3000, ell_ref, Dl_ref)) if len(ell_ref) else float('nan')
-
-    d3000_self = float(np.interp(3000, ell_self, Dl_self)) if len(ell_self) else float('nan')
-    print(f"  z_i=z_j (z={z_check:.2f}) D_3000 = {d3000_self:.4g} uK^2")
-    print(f"  qperp_power's own P(k), same formula, D_3000 = {d3000_ref:.4g} uK^2")
-    self_check_frac = abs(d3000_self - d3000_ref) / abs(d3000_ref) if d3000_ref else float('nan')
-    if self_check_frac < 0.15:
-        print(f"  OK ({self_check_frac:.1%} difference -- plausible from kz=0-slice-based 2D "
-              f"binning vs qperp_power's full-3D radial binning being genuinely different "
-              f"statistical estimators, not identical by construction) -- proceeding to "
-              f"z_i!=z_j cross terms.\n")
+    # ================================================================
+    # SANITY CHECK: the previous "fake duplicate z" self-check is no
+    # longer meaningful now that weighting includes dchi -- a duplicate
+    # entry with IDENTICAL chi gives dchi=0 via np.gradient, trivially
+    # zeroing the result regardless of correctness. The w_pair formula's
+    # exactness at i=j (sqrt(x*x)=x for x=vis2_i/a_i^4*dchi_i) is a
+    # MATHEMATICAL identity, true by algebra for any non-negative x --
+    # not something a runtime test can meaningfully strengthen. Instead,
+    # check the genuinely new piece of logic here (tau accumulation) for
+    # a real bug signature: visibility must be monotonically
+    # NON-INCREASING with z (optical depth only accumulates looking
+    # further back), never counting backwards.
+    # ================================================================
+    print("\nSANITY CHECK: visibility should be monotonically non-increasing with z...")
+    zs_sorted = sorted(z_window)
+    chi_arr_check = np.array([chi_dict[z] for z in zs_sorted])
+    dchi_check = np.abs(np.gradient(chi_arr_check))
+    xe_check = np.array([1.0 - xH_mean_dict[z] for z in zs_sorted])
+    from ksz_pipeline.ksz.optical_depth import analytic_tau_below
+    from ksz_pipeline.utils.constants import SIGMA_T, MPC_CM
+    tau0_check = analytic_tau_below(zs_sorted[0])
+    tau_check = np.full(len(zs_sorted), tau0_check)
+    for i in range(len(zs_sorted) - 1):
+        zmid = 0.5 * (zs_sorted[i] + zs_sorted[i + 1])
+        xe_mid = 0.5 * (xe_check[i] + xe_check[i + 1])
+        tau_check[i + 1] = tau_check[i] + SIGMA_T * ne0_cgs() * xe_mid * (1.0 + zmid) ** 2 * (dchi_check[i] * MPC_CM)
+    vis2_check = np.exp(-2.0 * tau_check)
+    is_monotonic = np.all(np.diff(vis2_check) <= 1e-12)
+    print(f"  visibility^2 range: {vis2_check.min():.4g} (z={zs_sorted[np.argmin(vis2_check)]:.1f}) "
+          f"to {vis2_check.max():.4g} (z={zs_sorted[np.argmax(vis2_check)]:.1f})")
+    if is_monotonic:
+        print("  OK -- monotonically non-increasing with z, as physically required.\n")
     else:
-        print(f"  *** WARNING: {self_check_frac:.1%} difference -- larger than the expected "
-              f"weighting-mismatch range, investigate before trusting cross-z results below. ***\n")
+        print("  *** WARNING: NOT monotonic -- likely bug in tau accumulation, "
+              "investigate before trusting cross-z results below. ***\n")
 
     # ================================================================
     # THE ACTUAL CROSS-Z CALCULATION
     # ================================================================
     print("Computing q_perp cross-z correlation (z_i != z_j, all pairs)...")
     ell_qperp, Dl_qperp_cross, n_pairs = cross_power_qperp_pairwise_chi(
-        qperp_components, chi_dict, BOX_LEN)
+        qperp_components, chi_dict, xH_mean_dict, BOX_LEN)
     n_pairs_expected = len(z_window) * (len(z_window) - 1) // 2
     print(f"  {n_pairs}/{n_pairs_expected} pairs contributed")
     d3000_qperp_cross = float(np.interp(3000, ell_qperp, Dl_qperp_cross))

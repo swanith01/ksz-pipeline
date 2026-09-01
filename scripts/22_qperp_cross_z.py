@@ -51,23 +51,33 @@ from ksz_pipeline.coeval.qperp_cross_z import (compute_qperp_transverse_componen
                                                 cross_power_qperp_pairwise_chi)
 
 
-def main(config_path):
+def main(config_path, box_len_override=None, hii_dim_override=None, n_z_subset=None):
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
     sim_cfg = cfg['21cmfast']
-    BOX_LEN = sim_cfg['BOX_LEN']
-    HII_DIM = sim_cfg['HII_DIM_coeval']
+    BOX_LEN = box_len_override if box_len_override is not None else sim_cfg['BOX_LEN']
+    HII_DIM = hii_dim_override if hii_dim_override is not None else sim_cfg['HII_DIM_coeval']
+    is_fiducial = (BOX_LEN == sim_cfg['BOX_LEN'] and HII_DIM == sim_cfg['HII_DIM_coeval'])
     cache_dir = cfg['data']['cache_dir']
     out_dir  = cfg['data']['output_dir'].rstrip('/')
     plot_dir = cfg['data']['plot_dir'].rstrip('/')
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(plot_dir, exist_ok=True)
 
+    tag_suffix = "" if is_fiducial else f"_box{int(BOX_LEN)}_N{HII_DIM}"
+    print(f"BOX_LEN={BOX_LEN} Mpc, HII_DIM={HII_DIM} "
+          f"{'(FIDUCIAL)' if is_fiducial else '(OVERRIDE -- quick test, not fiducial)'}\n")
+
     closure_path = f"{out_dir}/closure_test.npz"
     if not os.path.exists(closure_path):
         raise FileNotFoundError(f"{closure_path} not found -- run script 14 first.")
     closure = np.load(closure_path)
     z_window = [float(z) for z in closure['z_window']]
+    if n_z_subset and n_z_subset < len(z_window):
+        step = max(1, len(z_window) // n_z_subset)
+        z_window = z_window[::step]
+        print(f"Subsampled to {len(z_window)} z's for a quick test "
+              f"(--n-z-subset={n_z_subset})")
     print(f"Using {len(z_window)} z's from closure_test.npz's own matched window\n")
 
     # ---- build q_perp components per z (cheap: one 3D FFT each, cache-hit boxes) ----
@@ -118,7 +128,7 @@ def main(config_path):
     dchi_check = np.abs(np.gradient(chi_arr_check))
     xe_check = np.array([1.0 - xH_mean_dict[z] for z in zs_sorted])
     from ksz_pipeline.ksz.optical_depth import analytic_tau_below
-    from ksz_pipeline.utils.constants import SIGMA_T, MPC_CM
+    from ksz_pipeline.utils.constants import SIGMA_T, MPC_CM, ne0_cgs
     tau0_check = analytic_tau_below(zs_sorted[0])
     tau_check = np.full(len(zs_sorted), tau0_check)
     for i in range(len(zs_sorted) - 1):
@@ -190,19 +200,26 @@ def main(config_path):
     ax.set_title('q_perp cross-z (periodicity-free) vs stitched P_off')
     ax.legend(fontsize=9)
     plt.tight_layout()
-    plot_path = f"{plot_dir}/qperp_cross_z.png"
+    plot_path = f"{plot_dir}/qperp_cross_z{tag_suffix}.png"
     fig.savefig(plot_path, dpi=140, bbox_inches='tight')
     print(f"\nSaved -> {plot_path}")
 
-    np.savez(f"{out_dir}/qperp_cross_z.npz",
+    np.savez(f"{out_dir}/qperp_cross_z{tag_suffix}.npz",
               ell_qperp=ell_qperp, Dl_qperp_cross=Dl_qperp_cross, n_pairs=n_pairs,
               d3000_qperp_cross=d3000_qperp_cross, d3000_off_stitched=d3000_off_stitched,
-              ratio=ratio, self_check_frac=self_check_frac)
-    print(f"Saved -> {out_dir}/qperp_cross_z.npz")
+              ratio=ratio, vis2_monotonic=is_monotonic)
+    print(f"Saved -> {out_dir}/qperp_cross_z{tag_suffix}.npz")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/fiducial.yaml")
+    parser.add_argument("--box-len", type=float, default=None,
+                         help="Override BOX_LEN for a quick test (e.g. --box-len 200 --hii-dim 32)")
+    parser.add_argument("--hii-dim", type=int, default=None,
+                         help="Override HII_DIM -- see --box-len")
+    parser.add_argument("--n-z-subset", type=int, default=None,
+                         help="Subsample z_window to roughly this many z's, for a fast test "
+                              "(fewer pairs = O(n^2) cost drops fast, e.g. 5 -> 10 pairs)")
     args = parser.parse_args()
-    main(args.config)
+    main(args.config, args.box_len, args.hii_dim, args.n_z_subset)

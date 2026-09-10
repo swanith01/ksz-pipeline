@@ -70,6 +70,43 @@ def qperp_power(delta, xH, vx, vy, vz, BOX_LEN, nbins=None):
     qy = w * vy
     qz = w * vz
 
+    return _qperp_power_from_q(qx, qy, qz, BOX_LEN, nbins)
+
+
+def qperp_power_from_momentum(px, py, pz, xH, BOX_LEN, nbins=None):
+    """
+    P_{q_perp}(k) from a MASS-WEIGHTED momentum field p = (1+delta)*v,
+    for codes (e.g. AMBER) that deposit momentum directly rather than
+    storing delta and v separately.
+
+    Identical to qperp_power(delta, xH, v) with p = (1+delta)*v, but
+    avoids reconstructing v = p/(1+delta), which is ill-defined where
+    an interlaced/deconvolved density field is ~0 or slightly negative.
+
+    Parameters
+    ----------
+    px/py/pz : ndarray (N,N,N)  (1+delta)*v, physical peculiar velocity
+               [cm/s] (same velocity convention as qperp_power)
+    xH       : ndarray (N,N,N)  neutral hydrogen fraction
+    BOX_LEN  : float            comoving box side length [Mpc]
+    nbins    : int or None      same meaning/default as qperp_power
+
+    Returns
+    -------
+    Same as qperp_power.
+    """
+    chi = 1.0 - xH
+    return _qperp_power_from_q(chi * px, chi * py, chi * pz, BOX_LEN, nbins)
+
+
+def _qperp_power_from_q(qx, qy, qz, BOX_LEN, nbins=None):
+    """
+    Shared FFT / transverse-projection / binning core of qperp_power.
+    Moved here VERBATIM from qperp_power's body (2026-09 refactor) so
+    qperp_power and qperp_power_from_momentum cannot drift apart.
+    qperp_power's output is bit-identical to the pre-refactor version
+    (tests/test_amber_adapter.py::test_qperp_refactor_bit_identical).
+    """
     N = qx.shape[0]
     L = float(BOX_LEN)
     d = L / N

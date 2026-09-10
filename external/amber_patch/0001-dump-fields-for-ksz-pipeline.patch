@@ -1,0 +1,45 @@
+--- a/src/cmbreion.f90	2026-09-10 11:54:10.025648245 +0000
++++ b/src/cmbreion.f90	2026-09-10 12:06:10.257783804 +0000
+@@ -183,6 +183,11 @@
+        call mesh_velocity
+ 
+ 
++       ! [ksz-pipeline] Dump the SAME interlaced fields cmb_powerspectrum
++       ! uses (mesh%rho2, mesh%mom2), before anything else touches them
++       call cmb_dumpfields
++
++
+        ! Patchy tau,ksz
+        call cmb_powerspectrum
+        call cmb_angularpowerspectrum
+@@ -209,6 +214,30 @@
+   contains
+ 
+ 
++    subroutine cmb_dumpfields
++      ! [ksz-pipeline] Raw stream file, no record markers, native endian:
++      !   real(4) z
++      !   real(4) rho2(Nm1d,Nm1d,Nm1d)    : 1+delta (interlaced, deconvolved)
++      !   real(4) mom2(3,Nm1d,Nm1d,Nm1d)  : (1+delta)*v [km/s], v = proper
++      !                                     peculiar velocity (unit%vel)
++      ! Filename mirrors cmb_powerspectrum's power_<zstr>.txt so the two
++      ! pair up one-to-one. Read with ksz_pipeline.amber.io.read_fields.
++      implicit none
++      integer(4)    :: un
++      character(80) :: fn
++
++      un = 12
++      fn = trim(cmb%dirout)//'fields_'//trim(sim%zstr)//'.dat'
++      write(*,*) 'Writing ',trim(fn)
++      open(un,file=fn,access='stream',form='unformatted',status='replace')
++      write(un) real(cosmo%z,kind=4)
++      write(un) mesh%rho2
++      write(un) mesh%mom2
++      close(un)
++      return
++    end subroutine cmb_dumpfields
++
++
+     subroutine cmb_ray
+       ! Default
+       implicit none

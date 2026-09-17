@@ -33,6 +33,7 @@ Usage
         --stage convention
 """
 import argparse
+import sys
 import logging
 import os
 import pickle
@@ -181,18 +182,27 @@ def make_loader(cfg, z_by_label):
 # Stages
 # ---------------------------------------------------------------------------
 def stage_convention(ell, layers, load_q, L, nbar, results_win):
-    """Gate 1: which power of a reproduces limber.compute_cell?"""
+    """Gate 1: which power of a reproduces limber.compute_cell?
+
+    Returns True/False on whether a_power=-2 (the analytically-derived value)
+    passes check_limber_diagonal's 5% tolerance -- see main()'s exit code,
+    used to stop an unattended chained job before it burns a night on
+    --stage run with an unconfirmed normalisation.
+    """
     ell_d, Dl_d, *_ = compute_cell(results_win)
     Dl_ref = np.interp(ell, ell_d, Dl_d)
 
     log.info("%-10s %-16s", "a_power", "median ratio")
     best = None
+    passed_m2 = False
     for a_power in (-3.0, -2.0, -1.0, 0.0, 1.0, 2.0):
         w = LayerWeights(nbar_e0_cgs=nbar, a_power=a_power)
         res = check_limber_diagonal(ell, layers, load_q, L, w, Dl_ref)
         r = res["median_ratio"]
         log.info("%-10.1f %-16.4f %s", a_power, r,
                  "<-- PASS" if res["passed"] else "")
+        if a_power == -2.0:
+            passed_m2 = bool(res["passed"])
         if np.isfinite(r) and (best is None or
                                abs(np.log(abs(r) + 1e-300)) <
                                abs(np.log(abs(best[1]) + 1e-300))):
@@ -206,6 +216,15 @@ def stage_convention(ell, layers, load_q, L, nbar, results_win):
              "exactly when p=-2, the 1/c^2 coming from q_los dividing v by c. "
              "This scan is therefore a regression test, not a search: anything "
              "but -2 winning means something drifted.")
+    if passed_m2:
+        log.info("GATE: PASSED (a_power=-2 within 5%% of limber.compute_cell)")
+    else:
+        log.error("GATE: FAILED -- a_power=-2 did NOT reproduce limber.compute_cell "
+                  "within 5%%. Do not trust --stage run output built on top of "
+                  "this. build_reference_results already matches resolution to "
+                  "the direct calc, so if this still fails the mismatch is "
+                  "somewhere else: tau, patchy window, or ne0.")
+    return passed_m2
 
 
 def stage_coherence(layers, load_q, L, outdir):
@@ -414,7 +433,8 @@ def main():
 
     if args.stage == "convention":
         ref = build_reference_results(cfg, ZS_win)
-        stage_convention(ell, layers, load_q, L, ne0_cgs(), ref)
+        if not stage_convention(ell, layers, load_q, L, ne0_cgs(), ref):
+            sys.exit(1)   # stop a chained job here -- see stage_convention docstring
     elif args.stage == "coherence":
         stage_coherence(layers, load_q, L, outdir)
     elif args.stage == "kpar0":

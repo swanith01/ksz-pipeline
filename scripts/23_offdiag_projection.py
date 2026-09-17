@@ -162,6 +162,24 @@ def build_reference_results(cfg, ZS_win):
     return out
 
 
+def self_consistent_window(ref):
+    """Filter a freshly-built results dict to compute_cell's OWN patchy
+    thresholds, using ITS xH_mean -- so the returned z list is exactly what
+    compute_cell will integrate over, whatever resolution ref was built at.
+
+    Necessary in practice: the driver's window is selected from
+    qperp_power.pkl's CACHED xH_mean, but --stage convention compares against
+    freshly-recomputed xH_mean at (possibly) a different resolution. Confirmed
+    (17 Sep window-check job) that this can disagree at a boundary snapshot --
+    z=4.5, near full ionisation, crossed the 1e-4 threshold between cached and
+    fresh values at hii-dim=128, dropped by compute_cell but not by the
+    driver's cached-based window, shifting tau0 (anchored to min(z)) and
+    failing the gate for a reason having nothing to do with the estimator.
+    """
+    XHI_MIN, XHI_MAX = 1.0e-4, 1.0 - 1.0e-4
+    return sorted(z for z, v in ref.items() if XHI_MIN <= v["xH_mean"] <= XHI_MAX)
+
+
 def make_loader(cfg, z_by_label):
     """layer -> q_z = (1+delta) * xHII * v_z / c.
 
@@ -448,7 +466,14 @@ def main():
 
     if args.stage == "convention":
         ref = build_reference_results(cfg, ZS_win)
-        if not stage_convention(ell, layers, load_q, L, ne0_cgs(), ref):
+        zs_ok = self_consistent_window(ref)
+        if set(zs_ok) != set(ZS_win):
+            log.warning("cached window and fresh window disagree; dropping %s "
+                       "before the gate so both sides compare the same "
+                       "snapshots", sorted(set(ZS_win) - set(zs_ok)))
+        ref = {z: ref[z] for z in zs_ok}
+        layers_ok = [l for l in layers if z_by_label[l.label] in zs_ok]
+        if not stage_convention(ell, layers_ok, load_q, L, ne0_cgs(), ref):
             sys.exit(1)   # stop a chained job here -- see stage_convention docstring
     elif args.stage == "coherence":
         stage_coherence(layers, load_q, L, outdir)

@@ -64,7 +64,8 @@ just memory-heavy). Always call it on group_slices_by_snapshot's output.
 import numpy as np
 
 from .stitch_from_coeval import comoving_distance_mpc
-from ..utils.constants import SIGMA_T, MPC_CM, C_CGS, T_CMB_K, NE0_HYDROGEN_ONLY
+from ..utils.constants import (SIGMA_T, MPC_CM, C_CGS, T_CMB_K,
+                               NE0_HYDROGEN_ONLY, ne0_cgs)
 
 
 def compute_ksz_map_per_slice(density_1plus, x_HII_field, v_los_Mpc_s,
@@ -86,7 +87,10 @@ def compute_ksz_map_per_slice(density_1plus, x_HII_field, v_los_Mpc_s,
                    own a2_mid
     """
     if ne0 is None:
-        ne0 = NE0_HYDROGEN_ONLY
+        ne0 = ne0_cgs()   # was NE0_HYDROGEN_ONLY; every caller already
+                          # passes ne0=ne0_cgs() explicitly (script 17), and
+                          # limber.compute_cell uses the same, so the old
+                          # default was a latent mismatch, not an active one.
 
     c_Mpc_s   = C_CGS / MPC_CM
     prefactor = ne0 * SIGMA_T * C_CGS

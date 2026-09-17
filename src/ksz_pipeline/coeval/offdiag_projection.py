@@ -104,7 +104,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Callable, Iterable, Optional, Sequence, Tuple
+from collections import OrderedDict
+from typing import Callable, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -157,12 +158,19 @@ class LayerWeights:
     with B = sigma_T * nbar_e0 * MPC_CM  [per Mpc], and the q field carrying
     v/c so that C_l comes out dimensionless.
 
-    ``a_power`` MUST be set to whatever reproduces ``limber.py:compute_cell``
-    on the diagonal.  The old eq. (18) implies a_power = 2 for its own q
-    convention; verify, do not assume.
+    ``a_power`` MUST be confirmed against ``limber.py:compute_cell`` on the
+    diagonal.  For THIS repo's momentum convention the expected value is -2:
+    ``momentum.py`` builds w = (1+delta)*(1-xH) with v in cm/s and keeps both
+    ne0 and (1+z)^3 OUT of q, so
+
+        a * n_e * v = ne0 * a^-3 * (1+delta) * xHII * a * v = ne0 * a^-2 * q_code
+
+    i.e. W ~ B a^-2 e^-tau.  (The referee note's eq. 18 writes a_i^2 a_j^2;
+    that is (1+z)^2, the same thing the other way up.)  Verify, do not assume --
+    ``check_limber_diagonal`` is the arbiter.
     """
     nbar_e0_cgs: float          # mean electron number density today [cm^-3]
-    a_power: float = 2.0
+    a_power: float = -2.0
 
     @property
     def B_per_Mpc(self) -> float:
@@ -190,15 +198,22 @@ def q_los(delta: np.ndarray,
     delta, x_HII, v_los : ndarray, shape (N, N, N)
         Density contrast, ionised fraction, and the line-of-sight velocity
         component (component along axis 2).
-    v_units : {"c", "km/s"}
+    v_units : {"c", "km/s", "cm/s"}
+        This repo's ``momentum.build_momentum`` uses cm/s -- that is the
+        default you almost certainly want here.
+
+    Note the (1+z)^3 and ne0 factors are deliberately NOT applied, matching
+    ``momentum.py``; they live in ``LayerWeights`` instead.
     """
     if delta.shape != x_HII.shape or delta.shape != v_los.shape:
         raise ValueError("delta, x_HII, v_los must have identical shapes")
     v = np.asarray(v_los, dtype=np.float64)
     if v_units == "km/s":
         v = v / C_LIGHT_KMS
+    elif v_units == "cm/s":
+        v = v / (C_LIGHT_KMS * 1.0e5)
     elif v_units != "c":
-        raise ValueError("v_units must be 'c' or 'km/s'")
+        raise ValueError("v_units must be 'c', 'km/s' or 'cm/s'")
     return (1.0 + delta) * x_HII * v
 
 
@@ -420,6 +435,8 @@ def dl_off(ell: np.ndarray,
            window: str = "tophat",
            include_diagonal: bool = False,
            progress: bool = True,
+           cache_size: int = 8,
+           fft_dtype=np.complex64,
            ) -> Tuple[np.ndarray, dict]:
     """D_l^off = T_CMB^2 l(l+1)/(2pi) * 2 sum_{i<j} Re C_l^{ij}.
 
@@ -433,6 +450,14 @@ def dl_off(ell: np.ndarray,
     include_diagonal : bool
         If True, also return the i == j sum -- useful only for the Limber
         regression check, not part of D_l^off.
+    cache_size : int
+        How many snapshot FFTs to hold at once.  Pairs are prefiltered to those
+        within ``max_sep``, so a window of ~8 covers the fiducial grid without
+        reloading.  Peak memory is roughly cache_size * N^3 * itemsize.
+    fft_dtype :
+        complex64 halves memory (1.07 GB vs 2.15 GB per 512^3 box) at a
+        precision cost that is far below the ring-average scatter.  Use
+        complex128 if you want to rule that out.
 
     Returns
     -------
@@ -442,51 +467,73 @@ def dl_off(ell: np.ndarray,
     """
     ell = np.asarray(ell, dtype=float)
     n = len(layers)
+    max_sep = 0.5 * L if max_sep is None else max_sep
 
-    log.info("FFTing %d snapshots", n)
-    qk = []
-    for li in layers:
-        q = load_q(li)
+    # --- pair prefilter ------------------------------------------------------
+    # Pairs separated by more than max_sep contribute zero by construction
+    # (their xi is hard-zeroed), so skip them rather than paying an FFT for a
+    # guaranteed zero.  At the fiducial 800 Mpc / 29 snapshots this drops
+    # 406 pairs to ~90, none more than 6 snapshots apart.
+    pairs = [(i, j)
+             for i in range(n)
+             for j in range(i if include_diagonal else i + 1, n)
+             if abs(layers[i].chi - layers[j].chi) <= max_sep]
+    n_skipped = (n * (n + 1) // 2 if include_diagonal else n * (n - 1) // 2) - len(pairs)
+    log.info("%d pairs within %.0f Mpc; %d skipped as guaranteed-zero",
+             len(pairs), max_sep, n_skipped)
+
+    # --- bounded FFT cache ---------------------------------------------------
+    # A 512^3 complex128 array is 2.1 GB; holding all 29 would be 62 GB.
+    # Pairs are ordered so that a small LRU window suffices.
+    cache: "OrderedDict[int, np.ndarray]" = OrderedDict()
+
+    def get_fft(idx: int) -> np.ndarray:
+        if idx in cache:
+            cache.move_to_end(idx)
+            return cache[idx]
+        q = load_q(layers[idx])
         if q.ndim != 3 or q.shape[0] != q.shape[1] or q.shape[0] != q.shape[2]:
             raise ValueError("expected a cubic (N,N,N) field")
-        qk.append(fft_field(q, L))
+        F = fft_field(q, L).astype(fft_dtype, copy=False)
         del q
+        cache[idx] = F
+        while len(cache) > cache_size:
+            cache.popitem(last=False)
+        return F
 
     cl_sum = np.zeros_like(ell)
     cl_diag = np.zeros_like(ell)
     pair_info = []
-    aliased_pairs = 0
-
-    pairs: Iterable[Tuple[int, int]] = (
-        [(i, j) for i in range(n) for j in range(i, n)] if include_diagonal
-        else [(i, j) for i in range(n) for j in range(i + 1, n)]
-    )
+    truncated_pairs = 0
 
     for count, (i, j) in enumerate(pairs):
-        xi, dgrid = mixed_correlator(qk[i], qk[j], L)
+        xi, dgrid = mixed_correlator(get_fft(i), get_fft(j), L)
         kc, xir, _ = ring_average(xi, L, n_bins=n_bins)
         del xi
         cl, info = cell_pair(ell, kc, xir, dgrid, layers[i], layers[j],
                              weights, L, max_sep=max_sep, window=window)
         pair_info.append(((i, j), info))
-        if info["aliasing_risk"]:
-            aliased_pairs += 1
+        if info["window_weight_discarded"] > 0.01:
+            truncated_pairs += 1
         contrib = np.nan_to_num(cl, nan=0.0)
         if i == j:
             cl_diag += contrib
         else:
             cl_sum += 2.0 * contrib      # both orderings
-        if progress and count % 25 == 0:
-            log.info("pair %d/%d  (i=%d j=%d)", count, len(list(pairs)) if
-                     isinstance(pairs, list) else -1, i, j)
+        if progress and count % 10 == 0:
+            log.info("pair %d/%d  (i=%d j=%d, dchi=%.0f Mpc)",
+                     count, len(pairs), i, j, info["delta_chi"])
 
+    cache.clear()
     conv = T_CMB_UK ** 2 * ell * (ell + 1.0) / (2.0 * np.pi)
     dl = conv * cl_sum
 
     report = {
         "pair_info": pair_info,
         "n_pairs": len(pair_info),
-        "n_pairs_beyond_half_box": aliased_pairs,
+        "n_pairs_skipped": n_skipped,
+        "n_pairs_window_truncated": truncated_pairs,
+        "max_sep": max_sep,
         "ell_min_box": 2.0 * np.pi * min(l.chi for l in layers) / L,
         "dl_diagonal": conv * cl_diag if include_diagonal else None,
         "band_limit_note": (
@@ -494,12 +541,12 @@ def dl_off(ell: np.ndarray,
             "outside [2 pi chi / L, pi N chi / L]."
         ),
     }
-    if aliased_pairs:
+    if truncated_pairs:
         log.warning(
-            "%d/%d pairs have |Delta chi| > max_sep; their cross terms were "
-            "zeroed. Run radial_coherence_diagnostic to confirm xi has decayed "
-            "by that separation, otherwise the box is too small.",
-            aliased_pairs, len(pair_info))
+            "%d/%d kept pairs lost >1%% of their window weight to the "
+            "|Delta| <= %.0f Mpc cut. Run radial_coherence_diagnostic: if xi "
+            "has not decayed by then, the box is too small to quote a result.",
+            truncated_pairs, len(pair_info), max_sep)
     return dl, report
 
 

@@ -138,6 +138,29 @@ def _fields_for(cfg, z):
                              random_seed=sim["random_seed"])
 
 
+def build_reference_results(cfg, ZS_win):
+    """Fresh qperp_power reference at the config's ACTUAL box_len/hii_dim.
+
+    stage_convention used to compare against results_all from
+    qperp_power.pkl, which was cached at the fiducial resolution (512^3).
+    With --hii-dim/--box-len overrides for fast testing, that compared a
+    small-box direct calculation against a large-box reference -- confirmed
+    (17 Sep run: ratio 4.59 instead of ~1.0 at a_power=-2, traced to exactly
+    this mismatch) to produce a spurious factor with nothing to do with the
+    estimator. Recomputing here makes both sides use identical fields.
+
+    Cheap in practice: py21cmfast caches coeval boxes to disk on
+    (params, seed), so this is a fast re-read, not a recomputation -- the
+    same "Existing ... found and read in" lines seen in the 17 Sep log.
+    """
+    out = {}
+    for z in ZS_win:
+        delta, xH, vx, vy, vz = _fields_for(cfg, z)
+        k, P, Pstd = qperp_power(delta, xH, vx, vy, vz, cfg["21cmfast"]["BOX_LEN"])
+        out[z] = {"k": k, "Pqperp": P, "Pstd": Pstd, "xH_mean": float(xH.mean())}
+    return out
+
+
 def make_loader(cfg, z_by_label):
     """layer -> q_z = (1+delta) * xHII * v_z / c.
 
@@ -390,7 +413,8 @@ def main():
              2 * np.pi * min(l.chi for l in layers) / L, len(layers))
 
     if args.stage == "convention":
-        stage_convention(ell, layers, load_q, L, ne0_cgs(), results_win)
+        ref = build_reference_results(cfg, ZS_win)
+        stage_convention(ell, layers, load_q, L, ne0_cgs(), ref)
     elif args.stage == "coherence":
         stage_coherence(layers, load_q, L, outdir)
     elif args.stage == "kpar0":

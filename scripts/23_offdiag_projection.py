@@ -189,7 +189,22 @@ def stage_convention(ell, layers, load_q, L, nbar, results_win):
     used to stop an unattended chained job before it burns a night on
     --stage run with an unconfirmed normalisation.
     """
-    ell_d, Dl_d, *_ = compute_cell(results_win)
+    ell_d, Dl_d, sigma_D_, C_ell_, sigma_C_, tau_out, xe_out = compute_cell(results_win)
+    zs_asc_used = set(float(z) for z in tau_out[0])
+    zs_asc_given = set(results_win.keys())
+    if zs_asc_used != zs_asc_given:
+        dropped = sorted(zs_asc_given - zs_asc_used)
+        added = sorted(zs_asc_used - zs_asc_given)
+        log.error("WINDOW MISMATCH: compute_cell's internal patchy filter used "
+                  "%d snapshots, not the %d passed in. dropped=%s added=%s. "
+                  "This alone can shift tau0 (anchored to min(z)) and explain "
+                  "a flat multiplicative offset in the ratio -- likely cause "
+                  "of any failure below.", len(zs_asc_used), len(zs_asc_given),
+                  dropped, added)
+    else:
+        log.info("window check: compute_cell used the same %d snapshots as "
+                 "the driver -- not the cause of any offset below.",
+                 len(zs_asc_used))
     Dl_ref = np.interp(ell, ell_d, Dl_d)
 
     log.info("%-10s %-16s", "a_power", "median ratio")

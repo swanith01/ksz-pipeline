@@ -237,3 +237,36 @@ def test_rho_guard_trips_on_wrong_field(tmp_path):
             io.list_field_files(str(tmp_path)),
             np.full((N, N, N), 9.0, np.float32), N, 100.0, 0.7,
             verbose=False)
+
+
+# 7. compute_cell's new tau0 kwarg must not change default behaviour ------
+def test_tau0_kwarg_defaults_unchanged(tmp_path):
+    from ksz_pipeline.coeval.limber import compute_cell
+    N, L_h, h = 16, 128.0, 0.6766
+    rng = np.random.default_rng(7)
+    zre = (5 + 8 * rng.random((N, N, N))).astype(np.float32)
+    for z in [5.5, 6.5, 7.5, 8.5, 9.5, 10.5]:
+        rho = (1 + 0.2 * rng.standard_normal((N, N, N))).astype(np.float32)
+        rho /= rho.mean()
+        mom = (200 * rng.standard_normal((3, N, N, N))).astype(np.float32)
+        _write_fields(tmp_path / f'fields_z={z:05.2f}.dat', z, rho, mom)
+    res = adapter.results_qperp_from_amber(io.list_field_files(str(tmp_path)),
+                                           zre, N, L_h, h, verbose=False)
+    base = compute_cell(res)
+    none = compute_cell(res, tau0=None)
+    for a, b in zip(base[:5], none[:5]):
+        assert np.array_equal(a, b)
+    # and an explicit tau0 must rescale D_ell by exactly exp(-2*dtau)
+    import ksz_pipeline.coeval.limber as lim
+    t0 = lim.analytic_tau_below(min(res))
+    hi = compute_cell(res, tau0=t0 + 0.02)
+    np.testing.assert_allclose(hi[1] / base[1], np.exp(-2 * 0.02), rtol=1e-12)
+
+
+def test_tau_below_amber_reads_history(tmp_path):
+    p = tmp_path / 'tau.txt'
+    p.write_text("z x_e tau\n0.00 1.0 0.0\n5.00 1.0 0.0400\n10.00 0.0 0.0600\n")
+    assert adapter.tau_below_amber(str(tmp_path), 5.0) == pytest.approx(0.04)
+    assert adapter.tau_below_amber(str(tmp_path), 7.5) == pytest.approx(0.05)
+    with pytest.raises(ValueError):
+        adapter.tau_below_amber(str(tmp_path), 12.0)

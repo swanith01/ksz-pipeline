@@ -38,7 +38,7 @@ def _interp_loglog(xq, xp, fp):
     return np.exp(np.interp(lq, lx, lf))
 
 
-def compute_cell(results_qperp, ells_full=None, ne0=None):
+def compute_cell(results_qperp, ells_full=None, ne0=None, tau0=None):
     """
     Compute C_ell and D_ell from cached P_{q_perp} results.
 
@@ -55,6 +55,15 @@ def compute_cell(results_qperp, ells_full=None, ne0=None):
         l=100 to l=31623 (10^4.5).
     ne0 : float, optional
         Mean electron density [cm^-3]. Default: ne0_cgs() with helium.
+    tau0 : float, optional
+        Optical depth accumulated BELOW the patchy window, i.e. from z=0
+        to min(ZS_asc). Default None -> analytic_tau_below(), unchanged
+        behaviour. Pass this when the simulation supplies its own
+        reionization history: analytic_tau_below() is one fixed history,
+        so across a sweep of histories (AMBER z_mid/Delta_z) it would hold
+        tau0 constant when the true value moves with the history, biasing
+        e^{-2tau} differently in each run. AMBER writes its own tau(z) to
+        output/cmb/tau.txt (see ksz_pipeline.amber.adapter.tau_below_amber).
 
     Returns
     -------
@@ -101,7 +110,8 @@ def compute_cell(results_qperp, ells_full=None, ne0=None):
     # there -- roughly half the true total for a typical z_min~5-6 (see
     # analytic_tau_below()'s docstring). That made e^{-2tau(z)} too large
     # at every z, inflating D_ell by roughly exp(2*tau_below) ~ 6-8%.
-    tau0 = analytic_tau_below(ZS_asc.min())
+    if tau0 is None:
+        tau0 = analytic_tau_below(ZS_asc.min())
     tau  = np.full_like(ZS_asc, tau0)
     for i in range(len(ZS_asc) - 1):
         zmid   = 0.5 * (ZS_asc[i]  + ZS_asc[i + 1])

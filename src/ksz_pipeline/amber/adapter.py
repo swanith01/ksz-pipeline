@@ -156,3 +156,22 @@ def amber_pqq_to_repo(k_h, P_qq, h, XH=0.76, YHe=0.24):
     k = np.asarray(k_h) * h
     P = np.asarray(P_qq) * KMS_TO_CMS**2 / h**3 / 2.0 / xe**2
     return k, P
+
+
+def tau_below_amber(cmb_dir, z):
+    """
+    tau(0 -> z) from AMBER's own output/cmb/tau.txt, for compute_cell's
+    tau0. AMBER integrates tau with the SAME history it simulated, so
+    across a (z_mid, Delta_z, A_z) sweep this moves as it should, while
+    analytic_tau_below() would stay fixed at one history's value.
+
+    Note tau.txt is mass/volume consistent with AMBER's own x_e(z) and
+    includes helium as AMBER treats it; it is the right partner for the
+    fields this adapter feeds in.
+    """
+    import os
+    t = np.loadtxt(os.path.join(cmb_dir, 'tau.txt'), skiprows=1)
+    if not (t[:, 0].min() <= z <= t[:, 0].max()):
+        raise ValueError(f"z={z} outside tau.txt range "
+                         f"[{t[0,0]}, {t[-1,0]}]")
+    return float(np.interp(z, t[:, 0], t[:, 2]))

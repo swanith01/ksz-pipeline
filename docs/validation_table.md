@@ -377,3 +377,18 @@ Source data: `data/products/audit_cumulative_d3000.npz`,
 **§1b additions (2026-07-22):** `data/products/closure_test.npz`
 (script `scripts/14_closure_test.py`, job 1684054 — corrected rerun 1684234
 pending). Plots via `notebooks/exploratory/closure_test_plots.py`.
+
+## ne0 convention across the direct/stitched comparison (17 Sep 2026)
+
+Checked whether the two sides of the P_off comparison used the same mean
+electron density. `limber.compute_cell` defaults to `ne0_cgs()` (helium
+included); `coherence_decomposition.compute_ksz_map_per_slice` defaulted to
+`NE0_HYDROGEN_ONLY`. Since C_ell ~ ne0^2 this would be an order-tens-of-percent
+offset between the curves.
+
+Result: NO RESULTS AFFECTED. `scripts/17_coherence_decomposition_fiducial.py`
+passes `ne0=ne0_cgs()` explicitly at both call sites, so the default was never
+reached. Both curves have always used helium-inclusive ne0.
+
+Action taken (61d51dc): default changed to `ne0_cgs()` so the two modules agree,
+removing the trap for future callers. No reruns required.

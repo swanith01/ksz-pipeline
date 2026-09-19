@@ -123,6 +123,37 @@ Two portability points found, both handled for ifort already:
 So on TIFR use ifort via `build_amber.sh`. A gfortran fallback is possible
 but needs those two edits — ask if oneAPI ever becomes unavailable.
 
+## AMBER's native lightcone (cl_ksz_healpix.txt) -- needs real HEALPix
+
+Two things labelled "AMBER" in earlier plots are NOT its lightcone:
+`cl_ksz.txt` and the orange/grey curves so far both come from
+`cmb_angularpowerspectrum` -- AMBER's own DIRECT/coeval Limber sum, the
+same method as `compute_cell`, just computed by AMBER's own code. AMBER's
+actual ray-traced lightcone (particle deposition onto a HEALPix map, see
+`map_make` in `cmbreion.f90`) writes a SEPARATE file, `cl_ksz_healpix.txt`,
+only when `Map = make` or `write`. Our current build cannot produce this:
+`external/amber_patch/healpix_stub.f90` stubs out the four HEALPix/FITS
+modules AMBER `use`s, and every stub call does `stop` rather than
+producing a map. That was fine for gates 1/2 (they only need `power_*.txt`
+and `cl_ksz.txt`), but it blocks the actual lightcone comparison.
+
+To get `cl_ksz_healpix.txt`, AMBER needs building against real HEALPix
+Fortran + cfitsio. No admin rights should be needed -- check first whether
+either is already installed (the way oneAPI was, with no module file):
+
+```bash
+find /apps /opt /usr/local -iname "*healpix*" -o -iname "*cfitsio*" 2>/dev/null
+pkg-config --exists cfitsio && pkg-config --cflags --libs cfitsio
+```
+
+If nothing turns up, both build from source into `$HOME` without admin:
+cfitsio first (autoconf, plain `./configure --prefix=$HOME/local && make
+install`), then HEALPix's Fortran package pointed at it. Once both exist,
+swap `healpix_stub.f90` out of the link line and add HEALPix's include/lib
+paths to `Makefile.ksz` -- ask before doing this build, since HEALPix's
+`configure` step is interactive by default (Fortran compiler, install
+dirs) and needs someone present, not something to script blind.
+
 ## Not yet integrated
 
 - **Stitched path.** Needs `stitch_from_coeval.py` (not reviewed yet).

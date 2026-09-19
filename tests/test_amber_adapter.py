@@ -270,3 +270,79 @@ def test_tau_below_amber_reads_history(tmp_path):
     assert adapter.tau_below_amber(str(tmp_path), 7.5) == pytest.approx(0.05)
     with pytest.raises(ValueError):
         adapter.tau_below_amber(str(tmp_path), 12.0)
+
+
+# 8. stitch_from_amber: ionization direction, both variants ----------------
+def test_exact_matches_ionized_mask(tmp_path):
+    """Regression test for a real bug: the 'exact' branch first written
+    used z < zre (the IONIZED condition) directly as xH (neutral
+    fraction), inverting the whole history. xH must be 1 (neutral) where
+    z >= zre, 0 (ionized) where z < zre -- opposite of AMBER's own
+    ionized-cell test."""
+    from ksz_pipeline.amber import stitch_from_amber as sfa
+    N = 8
+    rng = np.random.default_rng(11)
+    zre = (5 + 4 * rng.random((N, N, N))).astype(np.float32)
+    for z in [4.0, 5.0, 6.0, 7.0, 8.0, 9.0]:
+        rho = np.ones((N, N, N), np.float32)
+        mom = np.zeros((3, N, N, N), np.float32)
+        _write_fields(tmp_path / f'fields_z={z:05.2f}.dat', z, rho, mom)
+    files = io.list_field_files(str(tmp_path))
+    L_h, h = 64.0, 0.7
+    z_arr = sfa.build_los_z_grid(4.5, 8.5, cell_size=L_h / h / N)
+    lc = sfa.stitch_lightcone_from_amber(files, zre, z_arr, N, L_h, h,
+                                         interp=False)
+    from ksz_pipeline.ksz.stitch_from_coeval import (
+        comoving_pixel, rotated_indices, get_slab)
+    ir, jr = rotated_indices(N, 0.0)
+    z0 = z_arr.min()
+    for n in (0, len(z_arr) // 2, -1):
+        y = comoving_pixel(z_arr[n], z0, L_h / h / N, N)
+        expect_neutral = (z_arr[n] >= get_slab(zre, y, ir, jr))
+        np.testing.assert_array_equal(lc['xH_box'][:, :, n],
+                                      expect_neutral.astype(np.float32))
+    # low z (near z_arr.min()=4.5, below all zre~5-9) must be fully ionized
+    assert lc['xH_box'][:, :, 0].mean() < 0.01
+    # high z (near 8.5, above most zre) must be mostly neutral
+    assert lc['xH_box'][:, :, -1].mean() > 0.5
+
+
+def test_interp_and_exact_agree_in_direction(tmp_path):
+    from ksz_pipeline.amber import stitch_from_amber as sfa
+    N = 12
+    rng = np.random.default_rng(12)
+    zre = (6 + 3 * rng.random((N, N, N))).astype(np.float32)
+    for z in [5.0, 6.0, 7.0, 8.0, 9.0, 10.0]:
+        rho = (1 + 0.1 * rng.standard_normal((N, N, N))).astype(np.float32)
+        rho /= rho.mean()
+        mom = (50 * rng.standard_normal((3, N, N, N))).astype(np.float32)
+        _write_fields(tmp_path / f'fields_z={z:05.2f}.dat', z, rho, mom)
+    files = io.list_field_files(str(tmp_path))
+    L_h, h = 96.0, 0.7
+    z_arr = sfa.build_los_z_grid(5.2, 9.8, cell_size=L_h / h / N)
+    lc_i = sfa.stitch_lightcone_from_amber(files, zre, z_arr, N, L_h, h, interp=True)
+    lc_e = sfa.stitch_lightcone_from_amber(files, zre, z_arr, N, L_h, h, interp=False)
+    xi = lc_i['xH_box'].mean(axis=(0, 1))
+    xe = lc_e['xH_box'].mean(axis=(0, 1))
+    assert xi[0] < 0.3 and xe[0] < 0.3          # both ionized at low z
+    assert xi[-1] > 0.5 and xe[-1] > 0.5        # both neutral at high z
+    assert np.corrcoef(xi, xe)[0, 1] > 0.9      # same trend, not opposite
+
+
+def test_stitch_density_convention_raw_delta(tmp_path):
+    """density must be RAW delta (mean ~0), matching stitch_from_coeval's
+    documented contract -- NOT (1+delta)."""
+    from ksz_pipeline.amber import stitch_from_amber as sfa
+    N = 8
+    rng = np.random.default_rng(13)
+    zre = np.full((N, N, N), 7.0, np.float32)
+    for z in [6.0, 7.0, 8.0]:
+        rho = (1 + 0.3 * rng.standard_normal((N, N, N))).astype(np.float32)
+        rho /= rho.mean()
+        _write_fields(tmp_path / f'fields_z={z:05.2f}.dat', z, rho,
+                      np.zeros((3, N, N, N), np.float32))
+    files = io.list_field_files(str(tmp_path))
+    z_arr = sfa.build_los_z_grid(6.2, 7.8, cell_size=64.0 / 0.7 / N)
+    lc = sfa.stitch_lightcone_from_amber(files, zre, z_arr, N, 64.0, 0.7)
+    assert abs(lc['density'].mean()) < 0.2       # raw delta, centered near 0
+    assert lc['density'].mean() > -0.9           # NOT (1+delta)-1-1 etc.

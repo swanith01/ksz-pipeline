@@ -49,6 +49,7 @@ import numpy as np
 import yaml
 
 from ksz_pipeline.coeval.limber import compute_cell
+from ksz_pipeline.utils.constants import ne0_cgs
 
 try:
     import matplotlib
@@ -60,6 +61,56 @@ except ImportError:
 log = logging.getLogger("pdiag_check")
 
 
+def load_ours_diagonal(cfg, hii_dim, n_z_subset=None):
+    """Reproduce --stage convention's OWN diagonal (our new estimator's
+    dl_off(...,include_diagonal=True)) at a given resolution -- exactly the
+    calculation that failed the 17 Sep gate by ~1.56x at hii_dim=128.
+    Included here so the disagreement is visible on the plot directly,
+    rather than only described in a caveat.
+
+    Loads scripts/23_offdiag_projection.py by file path (module names can't
+    start with a digit for a plain `import`, and scripts/ is not a package)
+    and reuses its functions rather than duplicating them, so this stays in
+    sync with whatever that script's logic actually is.
+    """
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location(
+        "s23", os.path.join(here, "23_offdiag_projection.py"))
+    s23 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(s23)
+
+    cfg = dict(cfg)
+    cfg["21cmfast"] = dict(cfg["21cmfast"])
+    cfg["21cmfast"]["HII_DIM_coeval"] = hii_dim
+
+    ZS = sorted(cfg["coeval_ksz"]["z_snapshots"])
+    with open(os.path.join(cfg["data"]["cache_dir"], "qperp_power.pkl"), "rb") as f:
+        results_all = pickle.load(f)
+    ZS_win = s23.patchy_window(ZS, results_all)
+    if n_z_subset:
+        ZS_win = ZS_win[:n_z_subset]
+
+    tau_arr = s23.limber_tau_history(ZS_win, results_all)
+    tau_of_z = dict(zip(ZS_win, tau_arr)).__getitem__
+    layers = s23.build_layers(ZS_win, tau_of_z)
+    z_by_label = {l.label: z for l, z in zip(layers, ZS_win)}
+    load_q = s23.make_loader(cfg, z_by_label)
+
+    ref = s23.build_reference_results(cfg, ZS_win)
+    zs_ok = s23.self_consistent_window(ref)
+    layers_ok = [l for l in layers if z_by_label[l.label] in zs_ok]
+    log.info("ours (hii_dim=%d): %d/%d snapshots after self-consistent window",
+             hii_dim, len(layers_ok), len(layers))
+
+    weights = s23.LayerWeights(nbar_e0_cgs=ne0_cgs(), a_power=-2.0)
+    ps = cfg["power_spectrum"]
+    ell_ours = np.geomspace(ps["ell_min"], ps["ell_max"], ps["n_ell_bins"])
+    dl, rep = s23.dl_off(ell_ours, layers_ok, load_q, cfg["21cmfast"]["BOX_LEN"],
+                         weights, include_diagonal=True, progress=False)
+    return ell_ours, rep["dl_diagonal"], rep["ell_min_box"], hii_dim
+
+
 def main():
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
@@ -68,6 +119,12 @@ def main():
     p.add_argument("--stitched", default="data/products/coherence_decomposition_fiducial.npz")
     p.add_argument("--stitched-ell-key", default="ell_dec")
     p.add_argument("--stitched-diag-key", default="Dl_diag")
+    p.add_argument("--include-ours", type=int, default=None, metavar="HII_DIM",
+                   help="also overlay our new estimator's own diagonal, "
+                        "computed fresh at this HII_DIM (e.g. 128, the value "
+                        "that failed the 17 Sep gate by ~1.56x). Runs real "
+                        "coeval box loading -- slower than the base plot.")
+    p.add_argument("--include-ours-n-z-subset", type=int, default=None)
     p.add_argument("--outdir", default=None,
                    help="default: <plot_dir>/24_pdiag_check")
     args = p.parse_args()
@@ -136,10 +193,28 @@ def main():
                    "at the TRUE fiducial resolution, not the 128 override.",
                    median_ratio)
 
+    ell_ours = Dl_ours = ell_min_box_ours = ours_hii_dim = None
+    ratio_ours = None
+    if args.include_ours is not None:
+        log.info("computing our own estimator's diagonal at hii_dim=%d "
+                 "(this loads real coeval boxes -- slower)", args.include_ours)
+        ell_ours, Dl_ours, ell_min_box_ours, ours_hii_dim = load_ours_diagonal(
+            cfg, args.include_ours, args.include_ours_n_z_subset)
+        band_ours = ell_ours > ell_min_box_ours
+        Dl_formula_at_ours = np.interp(ell_ours, ell_formula, Dl_formula)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            ratio_ours = np.where(band_ours, Dl_ours / Dl_formula_at_ours, np.nan)
+        med_ours = float(np.nanmedian(ratio_ours))
+        log.info("ours / formula median ratio at hii_dim=%d: %.4f "
+                 "(this is the 17 Sep gate check, reproduced here)",
+                 args.include_ours, med_ours)
+
     np.savez(f"{outdir}/pdiag_formula_vs_native.npz",
              ell_formula=ell_formula, Dl_formula=Dl_formula,
              ell_native=ell_native, Dl_native=Dl_native,
-             ell_cmp=ell_cmp, ratio=ratio, median_ratio=median_ratio)
+             ell_cmp=ell_cmp, ratio=ratio, median_ratio=median_ratio,
+             ell_ours=ell_ours if ell_ours is not None else np.array([]),
+             Dl_ours=Dl_ours if Dl_ours is not None else np.array([]))
 
     if plt is not None:
         fig, (ax1, ax2) = plt.subplots(
@@ -149,23 +224,36 @@ def main():
                  label="P_diag from formula (compute_cell / Limber)")
         ax1.plot(ell_native, Dl_native, "s-", ms=3,
                  label="native P_diag (stitched map, Dl_diag)")
+        if Dl_ours is not None:
+            band_ours = ell_ours > ell_min_box_ours
+            ax1.plot(ell_ours[band_ours], Dl_ours[band_ours], "^--", ms=4,
+                     c="red",
+                     label=f"OUR new estimator's diagonal (hii_dim={ours_hii_dim}, "
+                           f"FAILS gate)")
         ax1.set_ylabel(r"$D_\ell\ [\mu K^2]$")
         ax1.set_xscale("log")
-        ax1.legend()
-        ax1.set_title("Independent cross-check: Limber formula vs the "
-                      "stitched map's own diagonal power")
+        ax1.legend(fontsize=8)
+        ax1.set_title("Limber formula vs stitched map's native diagonal "
+                      "vs our new estimator's own diagonal")
 
-        ax2.plot(ell_cmp, ratio, "k.-", ms=3)
+        ax2.plot(ell_cmp, ratio, "k.-", ms=3, label="formula/native")
+        if ratio_ours is not None:
+            ax2.plot(ell_ours, ratio_ours, "r^--", ms=4, label="ours/formula")
+            ax2.legend(fontsize=8)
         ax2.axhline(1.0, ls="--", c="grey")
         ax2.fill_between(ell_cmp, 0.95, 1.05, color="grey", alpha=0.2)
-        ax2.set_ylabel("formula / native")
+        ax2.set_ylabel("ratio")
         ax2.set_xlabel(r"$\ell$")
         ax2.set_xscale("log")
 
-        fig.text(0.5, 0.005,
-                 f"median ratio = {median_ratio:.3f} over {finite.sum()} "
-                 f"overlapping points (shaded band = within 5%)",
-                 ha="center", fontsize=9, style="italic")
+        caption = (f"formula/native median = {median_ratio:.3f} over "
+                  f"{finite.sum()} points (grey band = within 5%)")
+        if ratio_ours is not None:
+            caption += (f"  |  ours/formula median = {med_ours:.3f} at "
+                       f"hii_dim={ours_hii_dim} (UNRESOLVED, not a validated "
+                       f"result -- shown to make the disagreement visible)")
+        fig.text(0.5, 0.005, caption, ha="center", fontsize=8, style="italic",
+                 wrap=True)
         fig.tight_layout(rect=[0, 0.03, 1, 1])
         fig.savefig(f"{outdir}/pdiag_formula_vs_native.png", dpi=140)
         log.info("wrote %s/pdiag_formula_vs_native.png", outdir)

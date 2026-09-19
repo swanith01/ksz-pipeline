@@ -340,7 +340,10 @@ def warn_ne0_mismatch():
 
 
 def stage_run(ell, layers, load_q, L, weights, outdir, stitched_npz,
-              ell_key=None, off_key=None):
+              ell_key=None, off_key=None, caveat=None):
+    """caveat: free text stamped on the plot itself (e.g. current gate
+    status). Use this whenever --stage convention has not cleanly passed --
+    the artifact should carry that context, not just this session's log."""
     dl, rep = dl_off(ell, layers, load_q, L, weights)
     os.makedirs(outdir, exist_ok=True)
 
@@ -353,10 +356,13 @@ def stage_run(ell, layers, load_q, L, weights, outdir, stitched_npz,
              "decompose_p_total_diag_off uses a single chi_Mpc (chi_eff) for "
              "both ell=k*chi and Cl=P/chi^2. Near pairs agree closely; the "
              "spread across the window is the size of that approximation.")
+    if caveat:
+        log.warning("PLOT CAVEAT (stamped on figure): %s", caveat)
 
     np.savez(f"{outdir}/dl_off_corrected.npz", ell=ell, dl=dl,
              ell_min_box=rep["ell_min_box"], n_pairs=rep["n_pairs"],
-             n_pairs_skipped=rep["n_pairs_skipped"], max_sep=rep["max_sep"])
+             n_pairs_skipped=rep["n_pairs_skipped"], max_sep=rep["max_sep"],
+             caveat=caveat or "")
 
     dl_stitched = None
     if stitched_npz and os.path.exists(stitched_npz):
@@ -370,18 +376,28 @@ def stage_run(ell, layers, load_q, L, weights, outdir, stitched_npz,
         if dl_stitched is not None:
             ax.plot(ell, dl_stitched, "s-", c="tab:blue",
                     label=r"stitched $P_{\rm off}$")
+            # NOT claimed as a validated periodicity measurement while the
+            # gate below is unresolved -- shown for visual context only.
             frac = periodicity_split(dl, dl_stitched)
             ax.plot(ell[band], frac[band], "r--",
-                    label="difference = periodicity")
+                    label="difference (NOT a validated periodicity split "
+                          "while gate is open)" if caveat else
+                          "difference = periodicity")
             np.savez(f"{outdir}/periodicity_split.npz", ell=ell, dl_direct=dl,
-                     dl_stitched=dl_stitched, dl_periodicity=frac)
+                     dl_stitched=dl_stitched, dl_periodicity=frac,
+                     caveat=caveat or "")
         ax.axhline(0, ls=":", c="k")
         ax.axvline(rep["ell_min_box"], ls="--", c="grey")
         ax.set_xscale("log")
         ax.set_xlabel(r"$\ell$")
         ax.set_ylabel(r"$D_\ell\ [\mu K^2]$")
         ax.legend()
-        fig.tight_layout()
+        if caveat:
+            fig.text(0.5, 0.01, caveat, ha="center", va="bottom",
+                     fontsize=8, style="italic", wrap=True,
+                     bbox=dict(boxstyle="round", fc="lightyellow", ec="orange"))
+            fig.subplots_adjust(bottom=0.18)
+        fig.tight_layout(rect=[0, 0.06, 1, 1] if caveat else None)
         fig.savefig(f"{outdir}/dl_off_corrected.png", dpi=140)
         log.info("wrote %s/dl_off_corrected.png", outdir)
     return dl, rep
@@ -423,10 +439,15 @@ def main():
                    help="override HII_DIM_coeval for fast interactive testing")
     p.add_argument("--n-z-subset", type=int, default=None,
                    help="use only the first N snapshots in the window")
-    p.add_argument("--stitched", default="data/products/coherence_decomposition.npz",
+    p.add_argument("--stitched", default="data/products/coherence_decomposition_fiducial.npz",
                    help="npz holding Dl_off from decompose_p_total_diag_off")
-    p.add_argument("--stitched-ell-key", default=None)
+    p.add_argument("--stitched-ell-key", default="ell_dec",
+                   help="real file's keys (17 Sep) have no 'ell_off'/'ell'; "
+                        "'ell_dec' is the decomposition's own ell grid")
     p.add_argument("--stitched-off-key", default=None)
+    p.add_argument("--caveat", default=None,
+                   help="free text stamped on the --stage run plot, e.g. the "
+                        "current convention-gate status")
     args = p.parse_args()
 
     with open(args.config) as f:
@@ -481,7 +502,7 @@ def main():
         stage_kpar0(layers, load_q, cfg, z_by_label)
     else:
         stage_run(ell, layers, load_q, L, weights, outdir, args.stitched,
-                  args.stitched_ell_key, args.stitched_off_key)
+                  args.stitched_ell_key, args.stitched_off_key, args.caveat)
 
 
 if __name__ == "__main__":

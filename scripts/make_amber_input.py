@@ -269,6 +269,16 @@ def main():
     if len(set(tags)) != len(tags):
         raise SystemExit("CMB shell midpoints collide at 2 decimals -> "
                          "fields_*.dat would overwrite; widen czdel")
+    if a.mapmake == 'write':
+        if a.nside <= 0 or (a.nside & (a.nside - 1)) != 0:
+            raise SystemExit(
+                f"--mapmake write needs --nside as a power of two "
+                f"(128, 256, 512, ...); got {a.nside}. A reasonable first "
+                f"value for N={a.N} is 128 or 256 -- higher costs more "
+                f"compute/output for map detail this comparison doesn't "
+                f"need yet.")
+        print(f"map-making ON: Nside={a.nside} -> "
+              f"{12*a.nside**2:,} pixels per shell")
     print(f"{len(zm)} snapshots at z = {np.round(zm, 3).tolist()}")
 
     os.makedirs(os.path.join(a.out, 'input'), exist_ok=True)

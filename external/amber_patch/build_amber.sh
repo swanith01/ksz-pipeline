@@ -7,11 +7,23 @@
 #
 #   bash external/amber_patch/build_amber.sh            # -> ~/amber/src/amber.x
 #   ONEAPI=/other/path bash external/amber_patch/build_amber.sh ~/amber_alt
+#
+# HEALPix (optional, for Map=make/write -> cl_ksz_healpix.txt, AMBER's own
+# ray-traced lightcone; see docs/amber_integration.md). If HEALPIX_DIR
+# (a built HEALPix Fortran package -- lib/libhealpix.a, lib/libsharp.a,
+# include/*.mod) and CFITSIO_DIR (containing libcfitsio.a) are BOTH found,
+# builds against them; otherwise falls back to healpix_stub.f90 (maps
+# disabled, everything else this adapter uses is unaffected). Defaults
+# below match building HEALPix 3.83's F90 package (./configure -> option
+# 3 -> ifort) into $HOME/Healpix_3.83, and TIFR's cluster cfitsio (already
+# present via anaconda3 -- checked 2026-09-19, no build needed for it):
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 DEST=${1:-$HOME/amber}
 AMBER_COMMIT=9703f515a70b17e9bac38457d4891dad9abf7f84    # tested 2026-09-10
 ONEAPI=${ONEAPI:-/apps/intel/oneapi}
+HEALPIX_DIR=${HEALPIX_DIR:-$HOME/Healpix_3.83}
+CFITSIO_DIR=${CFITSIO_DIR:-/apps/anaconda3/lib}
 
 # setvars.sh is not 'set -u'-safe, so source it before enabling strict mode
 if [ -f "$ONEAPI/setvars.sh" ]; then
@@ -51,9 +63,19 @@ else
 fi
 rm -rf "$tmp"; echo "MKL flag: $MKLFLAG"
 
+if [ -f "$HEALPIX_DIR/lib/libhealpix.a" ] && [ -f "$CFITSIO_DIR/libcfitsio.a" ]; then
+  echo "HEALPix found: $HEALPIX_DIR  cfitsio: $CFITSIO_DIR  -> maps enabled"
+else
+  echo "HEALPix NOT found at $HEALPIX_DIR (or cfitsio at $CFITSIO_DIR) -- " \
+       "building with the stub; Map=make/write will abort, everything " \
+       "else (power_*.txt, cl_ksz.txt, tau.txt, fields_*.dat) is unaffected"
+fi
+
 # --- build ----------------------------------------------------------------
 make -f Makefile.ksz clean >/dev/null
-make -f Makefile.ksz MKLFLAG="$MKLFLAG" 2>&1 | tee build.log | grep -iE "error" && {
+make -f Makefile.ksz MKLFLAG="$MKLFLAG" \
+     HEALPIX_DIR="$HEALPIX_DIR" CFITSIO_DIR="$CFITSIO_DIR" \
+     2>&1 | tee build.log | grep -iE "error" && {
   echo "BUILD FAILED -- see $DEST/src/build.log"; exit 1; } || true
 [ -x amber.x ] || { echo "BUILD FAILED: no amber.x -- see $DEST/src/build.log"; exit 1; }
 echo

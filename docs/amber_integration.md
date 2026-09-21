@@ -123,36 +123,54 @@ Two portability points found, both handled for ifort already:
 So on TIFR use ifort via `build_amber.sh`. A gfortran fallback is possible
 but needs those two edits — ask if oneAPI ever becomes unavailable.
 
-## AMBER's native lightcone (cl_ksz_healpix.txt) -- needs real HEALPix
+## AMBER's native lightcone (cl_ksz_healpix.txt)
 
 Two things labelled "AMBER" in earlier plots are NOT its lightcone:
-`cl_ksz.txt` and the orange/grey curves so far both come from
+`cl_ksz.txt` and the orange/grey curves compared so far both come from
 `cmb_angularpowerspectrum` -- AMBER's own DIRECT/coeval Limber sum, the
 same method as `compute_cell`, just computed by AMBER's own code. AMBER's
 actual ray-traced lightcone (particle deposition onto a HEALPix map, see
 `map_make` in `cmbreion.f90`) writes a SEPARATE file, `cl_ksz_healpix.txt`,
-only when `Map = make` or `write`. Our current build cannot produce this:
-`external/amber_patch/healpix_stub.f90` stubs out the four HEALPix/FITS
-modules AMBER `use`s, and every stub call does `stop` rather than
-producing a map. That was fine for gates 1/2 (they only need `power_*.txt`
-and `cl_ksz.txt`), but it blocks the actual lightcone comparison.
+only when `Map = make` or `write`.
 
-To get `cl_ksz_healpix.txt`, AMBER needs building against real HEALPix
-Fortran + cfitsio. No admin rights should be needed -- check first whether
-either is already installed (the way oneAPI was, with no module file):
+**Status (2026-09-19): HEALPix Fortran built, build script updated, not
+yet run against real ifort.** cfitsio 3.47 was already on the TIFR
+cluster (`/apps/anaconda3`, both `.a` and header) -- no build needed.
+HEALPix 3.83's F90 package was built from source into `~/Healpix_3.83`
+(`./configure` -> option 3 -> `ifort`, cfitsio pointed at
+`/apps/anaconda3/{lib,include}`, then `make f90-libgif`), producing
+`lib/libhealpix.a`, `lib/libsharp.a` and the `.mod` files AMBER needs
+(`pix_tools`, `fitstools`, `head_fits`, `alm_tools`) under `include/`.
+
+`Makefile.ksz` and `build_amber.sh` now detect this automatically: if
+`HEALPIX_DIR` (default `$HOME/Healpix_3.83`) and `CFITSIO_DIR` (default
+`/apps/anaconda3/lib`) both contain the expected `.a` files, AMBER links
+against them for real and `healpix_stub.f90` is left out entirely; if
+either is missing it falls back to the stub as before. Nothing else about
+the build changes -- same command as always:
 
 ```bash
-find /apps /opt /usr/local -iname "*healpix*" -o -iname "*cfitsio*" 2>/dev/null
-pkg-config --exists cfitsio && pkg-config --cflags --libs cfitsio
+bash external/amber_patch/build_amber.sh
 ```
 
-If nothing turns up, both build from source into `$HOME` without admin:
-cfitsio first (autoconf, plain `./configure --prefix=$HOME/local && make
-install`), then HEALPix's Fortran package pointed at it. Once both exist,
-swap `healpix_stub.f90` out of the link line and add HEALPix's include/lib
-paths to `Makefile.ksz` -- ask before doing this build, since HEALPix's
-`configure` step is interactive by default (Fortran compiler, install
-dirs) and needs someone present, not something to script blind.
+Caveat: `healpix_stub.f90`'s call signatures were reverse-engineered from
+how AMBER's own source calls them, not verified against real HEALPix
+3.83's actual interfaces (I have no network access to HEALPix/ifort to
+test this myself). The stub itself is fine either way -- it's bypassed
+entirely once real HEALPix links in -- but AMBER compiling clean against
+the real library is genuinely untested until the build above is actually
+run. If it fails, paste `~/amber/src/build.log`.
+
+Once it links, a run with `Map=write` should produce `cl_ksz_healpix.txt`
+inside `output/cmb/` -- confirm with:
+
+```bash
+ls output/cmb/cl_ksz_healpix.txt
+```
+
+`make_amber_input.py --mapmake write --nside <N>` sets this on the input
+side; a reasonable `Nside` for a first test is 128-256 (higher costs more
+compute and produces a bigger map than needed for a first comparison).
 
 ## Not yet integrated
 

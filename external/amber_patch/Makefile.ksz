@@ -1,24 +1,50 @@
 # external/amber_patch/Makefile.ksz  -- [ksz-pipeline] build of patched AMBER
 # Same compiler flags as upstream src/Makefile (commit 9703f51), except:
-#   - HEALPix/cfitsio include+link lines removed; healpix_stub.o added
-#     (maps disabled; see healpix_stub.f90)
+#   - objects are kept after linking (upstream deletes them)
 #   - MKL flag passed in as MKLFLAG (-qmkl=parallel on newer ifort,
 #     -mkl=parallel on older; build_amber.sh detects which)
-#   - objects are kept after linking (upstream deletes them)
+#   - HEALPix/cfitsio: if HEALPIX_DIR (built Fortran package, containing
+#     lib/libhealpix.a + lib/libsharp.a + include/*.mod) and CFITSIO_DIR
+#     (containing libcfitsio.a) are BOTH passed in and found, links the
+#     real thing -- AMBER's HEALPix map output (Map=make/write,
+#     cl_ksz_healpix.txt) then works. Otherwise falls back to
+#     healpix_stub.f90 (see that file): AMBER still builds and every
+#     non-map output (power_*.txt, cl_ksz.txt, tau.txt, fields_*.dat --
+#     everything this repo's adapter reads) is unaffected; Map=make/write
+#     would abort with a clear message instead of silently producing
+#     nothing.
 FC     = ifort
 MKLFLAG ?= -qmkl=parallel
+HEALPIX_DIR ?=
+CFITSIO_DIR ?=
+
 FF     = -align -fpp -ftz -g -ip -ipo -O3 -traceback
 INTEL  = $(MKLFLAG) -mcmodel=medium -shared-intel
 OPENMP = -qopenmp
-FLAGS  = $(FF) $(INTEL) $(OPENMP)
 
-OBJ = healpix_stub.o constant.o timing.o mkl.o helper.o input.o \
+USE_HEALPIX := $(and $(wildcard $(HEALPIX_DIR)/lib/libhealpix.a),$(wildcard $(CFITSIO_DIR)/libcfitsio.a))
+
+ifneq ($(USE_HEALPIX),)
+  $(info Linking REAL HEALPix: $(HEALPIX_DIR)  cfitsio: $(CFITSIO_DIR))
+  HPXINC  = -I$(HEALPIX_DIR)/include
+  HPXLINK = -L$(HEALPIX_DIR)/lib -lhealpix -lsharp -L$(CFITSIO_DIR) -lcfitsio
+  STUBOBJ =
+else
+  $(info No HEALPIX_DIR/CFITSIO_DIR given (or libs not found there) -- using healpix_stub.f90; Map=make/write will abort, everything else works)
+  HPXINC  =
+  HPXLINK =
+  STUBOBJ = healpix_stub.o
+endif
+
+FLAGS  = $(FF) $(INTEL) $(OPENMP) $(HPXINC)
+
+OBJ = $(STUBOBJ) constant.o timing.o mkl.o helper.o input.o \
       sim.o cosmo.o mesh.o esf.o grf.o lpt.o reion.o cmb.o h21cm.o \
       simulation.o cosmology.o meshmake.o esfhalo.o grfmake.o lptmake.o \
       reionization.o cmbreion.o h21cmreion.o
 
 amber.x : $(OBJ)
-	$(FC) $(FLAGS) $(OBJ) amber.f90 -o $@
+	$(FC) $(FLAGS) $(OBJ) amber.f90 $(HPXLINK) -o $@
 
 %.o: %.f90
 	$(FC) $(FLAGS) -c $*.f90

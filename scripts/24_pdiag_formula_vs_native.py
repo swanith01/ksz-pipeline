@@ -195,6 +195,8 @@ def main():
 
     ell_ours = Dl_ours = ell_min_box_ours = ours_hii_dim = None
     ratio_ours = None
+    med_ours = None
+    ours_passed = None
     if args.include_ours is not None:
         log.info("computing our own estimator's diagonal at hii_dim=%d "
                  "(this loads real coeval boxes -- slower)", args.include_ours)
@@ -205,16 +207,20 @@ def main():
         with np.errstate(invalid="ignore", divide="ignore"):
             ratio_ours = np.where(band_ours, Dl_ours / Dl_formula_at_ours, np.nan)
         med_ours = float(np.nanmedian(ratio_ours))
-        log.info("ours / formula median ratio at hii_dim=%d: %.4f "
+        ours_passed = 0.95 <= med_ours <= 1.05
+        log.info("ours / formula median ratio at hii_dim=%d: %.4f (%s) "
                  "(this is the 17 Sep gate check, reproduced here)",
-                 args.include_ours, med_ours)
+                 args.include_ours, med_ours,
+                 "PASS" if ours_passed else "FAIL")
 
     np.savez(f"{outdir}/pdiag_formula_vs_native.npz",
              ell_formula=ell_formula, Dl_formula=Dl_formula,
              ell_native=ell_native, Dl_native=Dl_native,
              ell_cmp=ell_cmp, ratio=ratio, median_ratio=median_ratio,
              ell_ours=ell_ours if ell_ours is not None else np.array([]),
-             Dl_ours=Dl_ours if Dl_ours is not None else np.array([]))
+             Dl_ours=Dl_ours if Dl_ours is not None else np.array([]),
+             median_ratio_ours=med_ours if med_ours is not None else np.nan,
+             ours_hii_dim=ours_hii_dim if ours_hii_dim is not None else -1)
 
     if plt is not None:
         fig, (ax1, ax2) = plt.subplots(
@@ -226,10 +232,11 @@ def main():
                  label="native P_diag (stitched map, Dl_diag)")
         if Dl_ours is not None:
             band_ours = ell_ours > ell_min_box_ours
+            status = "PASSES gate" if ours_passed else "FAILS gate"
             ax1.plot(ell_ours[band_ours], Dl_ours[band_ours], "^--", ms=4,
                      c="red",
                      label=f"OUR new estimator's diagonal (hii_dim={ours_hii_dim}, "
-                           f"FAILS gate)")
+                           f"{status})")
         ax1.set_ylabel(r"$D_\ell\ [\mu K^2]$")
         ax1.set_xscale("log")
         ax1.legend(fontsize=8)
@@ -249,9 +256,14 @@ def main():
         caption = (f"formula/native median = {median_ratio:.3f} over "
                   f"{finite.sum()} points (grey band = within 5%)")
         if ratio_ours is not None:
+            verdict_text = ("VALIDATED -- within 5% of the Limber formula"
+                            if ours_passed else
+                            "NOT VALIDATED -- outside 5% of the Limber "
+                            "formula, treat with caution")
             caption += (f"  |  ours/formula median = {med_ours:.3f} at "
-                       f"hii_dim={ours_hii_dim} (UNRESOLVED, not a validated "
-                       f"result -- shown to make the disagreement visible)")
+                       f"hii_dim={ours_hii_dim} ({verdict_text}). Low-ell "
+                       f"points near the box fundamental mode carry large "
+                       f"sample variance for any estimator.")
         fig.text(0.5, 0.005, caption, ha="center", fontsize=8, style="italic",
                  wrap=True)
         fig.tight_layout(rect=[0, 0.03, 1, 1])

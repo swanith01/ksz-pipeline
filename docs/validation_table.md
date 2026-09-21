@@ -392,3 +392,17 @@ reached. Both curves have always used helium-inclusive ne0.
 
 Action taken (61d51dc): default changed to `ne0_cgs()` so the two modules agree,
 removing the trap for future callers. No reruns required.
+
+## Off-diagonal estimator (offdiag_projection.py) diagonal validation
+
+The corrected non-Limber diagonal reduction disagreed with limber.compute_cell
+by ~1.56x at hii_dim=128 (17 Sep). Five hypotheses tested and ruled out
+(wrong a_power, resolution mismatch in the gate's own reference, a boundary
+snapshot dropping out of the patchy window, ell-range clamping, non-Gaussian
+binning mismatch). Root cause: hii-dim=128 was simply too coarse for the
+estimator to converge -- confirmed by rerunning at the TRUE fiducial
+resolution (512, no override): ratio 1.0268, clean pass (19 Sep, job
+1722403.swarm). a_power=-2 stands confirmed. Any future run of this
+estimator must use hii_dim>=512 to be trusted; 128 and similar are fine only
+for mechanical/structural testing (does it run, does it plot), never for
+trusting the actual numbers.

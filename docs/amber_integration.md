@@ -161,16 +161,39 @@ entirely once real HEALPix links in -- but AMBER compiling clean against
 the real library is genuinely untested until the build above is actually
 run. If it fails, paste `~/amber/src/build.log`.
 
-Once it links, a run with `Map=write` should produce `cl_ksz_healpix.txt`
+Once it links, confirm the linked amber.x actually asks for the RIGHT
+MKL version before submitting a compute job (cheap, safe on the login
+node):
+
+```bash
+ldd ~/amber/src/amber.x | grep -i "mkl\|not found"
+```
+
+Every `mkl*.so` line should resolve to a path under `$MKLROOT` (the
+oneAPI version), and nothing should say "not found". A `libmkl_*.so.1`
+request that only `/apps/anaconda3/lib` can satisfy (MKL 2021.4.0, bundled
+there for numpy/scipy) means the linker picked up anaconda's MKL instead
+of oneAPI's -- hit this exactly once (2026-09-21), fixed by putting
+`-L$(MKLROOT)/lib/intel64` first, explicitly, in `Makefile.ksz`'s link
+line (see comment there). If it recurs after a Makefile change, don't
+just add anaconda3/lib to LD_LIBRARY_PATH to make the "not found" go away
+-- that would make it RUN, silently, against a different, unlogged MKL
+version than build_amber.sh reports and the validation gate was tested
+against.
+
+At runtime (not link time), the job also needs HEALPix's and cfitsio's
+shared libraries findable:
+
+```bash
+export LD_LIBRARY_PATH="$HOME/Healpix_3.83/lib:/apps/anaconda3/lib:$LD_LIBRARY_PATH"
+```
+
+A run with `Map=write` should then produce `cl_ksz_healpix.txt`
 inside `output/cmb/` -- confirm with:
 
 ```bash
 ls output/cmb/cl_ksz_healpix.txt
 ```
-
-`make_amber_input.py --mapmake write --nside <N>` sets this on the input
-side; a reasonable `Nside` for a first test is 128-256 (higher costs more
-compute and produces a bigger map than needed for a first comparison).
 
 ## Not yet integrated
 

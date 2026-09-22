@@ -27,7 +27,21 @@ USE_HEALPIX := $(and $(wildcard $(HEALPIX_DIR)/lib/libhealpix.a),$(wildcard $(CF
 ifneq ($(USE_HEALPIX),)
   $(info Linking REAL HEALPix: $(HEALPIX_DIR)  cfitsio: $(CFITSIO_DIR))
   HPXINC  = -I$(HEALPIX_DIR)/include
-  HPXLINK = -L$(HEALPIX_DIR)/lib -lhealpix -lsharp -L$(CFITSIO_DIR) -lcfitsio
+  # -L$(MKLROOT)/lib/intel64 explicit and FIRST: CFITSIO_DIR (often a conda
+  # env's lib/, e.g. anaconda3/lib on TIFR) can itself bundle its own MKL
+  # copy (numpy/scipy pull one in) under a DIFFERENT version -- found
+  # 2026-09-21: anaconda3/lib/libmkl_intel_lp64.so.1 (MKL 2021.4.0) sitting
+  # right next to the cfitsio we actually want, next to oneAPI's own MKL
+  # 2022.0.2 (.so.2). Without this, the linker can resolve -lmkl_intel_lp64
+  # (added internally by $(MKLFLAG)) against THAT copy instead of oneAPI's,
+  # and the resulting amber.x silently runs a different MKL version than
+  # the one build_amber.sh reports and the one the validation gate was run
+  # against -- no error, just an unlogged numerics-stack substitution.
+  # MKLROOT must be exported (build_amber.sh sources setvars.sh first).
+  ifeq ($(MKLROOT),)
+    $(error MKLROOT is unset -- source setvars.sh before running make)
+  endif
+  HPXLINK = -L$(MKLROOT)/lib/intel64 -L$(HEALPIX_DIR)/lib -lhealpix -lsharp -L$(CFITSIO_DIR) -lcfitsio
   STUBOBJ =
 else
   $(info No HEALPIX_DIR/CFITSIO_DIR given (or libs not found there) -- using healpix_stub.f90; Map=make/write will abort, everything else works)

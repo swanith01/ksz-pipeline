@@ -1,0 +1,14 @@
+#!/bin/bash
+#PBS -N hist_match_v2
+#PBS -q workq
+#PBS -l walltime=03:00:00
+#PBS -l select=1:ncpus=16:mem=32gb
+#PBS -j oe
+#PBS -o /user1/swanith/logs/hist_match_v2.log
+set -euo pipefail
+source /user1/swanith/miniconda3/etc/profile.d/conda.sh
+conda activate p21c_v3
+export OMP_NUM_THREADS=16
+cd /user1/swanith/hist_match
+python solve_history_v2.py --rmax-list 20 30 40 60 80 --max-nfev 40 \
+    --out solutions_400_64_v2.json

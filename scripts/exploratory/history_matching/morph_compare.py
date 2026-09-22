@@ -142,11 +142,17 @@ def summarize_box(xH, delta, box_len, n_mfp):
     out.update(k=k, Pee=Pee, Pxx=Pxx, Nmodes=Nm)
 
     lab, n = label_periodic(xH < 0.5)
+    N = xH.shape[0]
+    cell_size = box_len / N
     if n > 0:
-        vols = np.bincount(lab.ravel())[1:]
-        out.update(n_comp=int(n), giant_frac=float(vols.max() / vols.sum()))
+        vols_cells = np.bincount(lab.ravel())[1:]
+        vols_mpc3 = vols_cells * cell_size ** 3
+        radii_mpc = (3.0 * vols_mpc3 / (4.0 * np.pi)) ** (1.0 / 3.0)
+        out.update(n_comp=int(n), giant_frac=float(vols_cells.max() / vols_cells.sum()),
+                  bubble_radii=radii_mpc, bubble_vols=vols_mpc3)
     else:
-        out.update(n_comp=0, giant_frac=0.0)
+        out.update(n_comp=0, giant_frac=0.0,
+                  bubble_radii=np.array([]), bubble_vols=np.array([]))
 
     dist, never = mfp_distribution(xH, box_len, n_samples=n_mfp)
     out.update(mfp=dist, mfp_never=never,
@@ -266,11 +272,15 @@ def make_plots(meta, res, outdir):
     col[ref] = "k"
 
     with mpl.rc_context(style):
-        fig, axes = plt.subplots(3, len(zs), figsize=(4.6 * len(zs), 11),
+        fig, axes = plt.subplots(4, len(zs), figsize=(4.6 * len(zs), 14.5),
                                  sharex="row", squeeze=False,
-                                 gridspec_kw=dict(hspace=0.08, wspace=0.05))
+                                 gridspec_kw=dict(hspace=0.1, wspace=0.05))
+        GIANT_THRESH = 0.5   # above this, one component dominates -- CCL "bubble
+                             # size" stops being a meaningful question (see MFP
+                             # row instead); percolation transition in this data
+                             # happens between the z=10 and z=9 columns
         for j, z in enumerate(zs):
-            a0, a1, a2 = axes[0, j], axes[1, j], axes[2, j]
+            a0, a1, a2, a3 = axes[0, j], axes[1, j], axes[2, j], axes[3, j]
             rr = res[ref][z]
             for lab in labs:
                 r = res[lab][z]
@@ -284,6 +294,15 @@ def make_plots(meta, res, outdir):
                     dlnr = np.diff(np.log(e))
                     pdf = h / max(h.sum(), 1) / dlnr
                     a2.semilogx(np.sqrt(e[:-1] * e[1:]), pdf, color=col[lab], lw=lw)
+                if r["giant_frac"] <= GIANT_THRESH and len(r["bubble_radii"]):
+                    rb = r["bubble_radii"]
+                    vb = r["bubble_vols"]
+                    bbins = np.logspace(np.log10(max(rb.min(), meta["box_len"] / meta["hii_dim"])),
+                                        np.log10(meta["box_len"] / 2), 16)
+                    h, e = np.histogram(rb, bins=bbins, weights=vb)
+                    dlnr = np.diff(np.log(e))
+                    pdf = h / max(h.sum(), 1) / dlnr
+                    a3.semilogx(np.sqrt(e[:-1] * e[1:]), pdf, color=col[lab], lw=lw)
             band = np.sqrt(2.0 / np.maximum(rr["Nmodes"], 1))
             a1.fill_between(rr["k"], 1 - band, 1 + band, color="gray", alpha=0.2,
                             lw=0, label="unpaired sample-variance scale")
@@ -292,12 +311,20 @@ def make_plots(meta, res, outdir):
                          rf"{rr['xbar']:.2f}$)")
             a1.set_xlabel(r"$k\ [{\rm Mpc}^{-1}]$")
             a2.set_xlabel(r"distance to neutral cell [cMpc]")
+            a3.set_xlabel(r"bubble radius $R$ [cMpc]")
+            if all(res[lab][z]["giant_frac"] > GIANT_THRESH for lab in labs):
+                a3.text(0.5, 0.5, "percolated\n(giant $>$ %d%%)\nsee MFP row instead"
+                        % int(100 * GIANT_THRESH),
+                        transform=a3.transAxes, ha="center", va="center",
+                        fontsize=9, color="gray")
+                a3.set_xticks([]); a3.set_yticks([])
             if j == 0:
                 a0.set_ylabel(r"$P_{ee}(k)\ [{\rm Mpc}^3]$")
                 a1.set_ylabel(r"$P_{ee}/P_{ee}^{\rm ref}$")
                 a2.set_ylabel(r"MFP PDF  $dP/d\ln R$")
+                a3.set_ylabel(r"bubble-size PDF  $dP/d\ln R$")
             else:
-                for a in (a0, a1, a2):
+                for a in (a0, a1, a2, a3):
                     a.tick_params(labelleft=False)
             a1.set_ylim(0.5, 1.5)
         axes[0, 0].legend(loc="lower left")

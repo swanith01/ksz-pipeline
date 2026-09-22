@@ -112,8 +112,6 @@ def make_plot(all_dl, outdir):
         ax.set_xlabel(r"Multipole $\ell$")
         ax.set_ylabel(r"$D_\ell^{\rm kSZ}\ [\mu{\rm K}^2]$")
         ax.axvline(3000, color="gray", ls=":", lw=1)
-        ax.axhspan(1.1 - 0.7, 1.1 + 1.0, color="gray", alpha=0.15,
-                   label="Reichardt+2021 (patchy, at $\\ell=3000$)")
         ax.legend(fontsize=9, loc="upper left")
 
         sm = cm.ScalarMappable(norm=norm, cmap=cmap)

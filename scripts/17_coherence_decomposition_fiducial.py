@@ -342,10 +342,13 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     direct_label = 'coeval-direct (script 14)' if source == 'coeval' else \
                    'coeval-direct (script 14, ROUGH ANCHOR ONLY -- see caveat)'
     ax1.plot(ell_direct, Dl_direct, 'k-', lw=2, label=direct_label)
-    ax1.plot(ell_dec, Dl_diag, color='tab:blue', lw=2, ls='--', label='stitched P_diag (grouped, unshifted)')
-    ax1.plot(ell_dec, Dl_total, color='tab:red', lw=1.5, label='stitched P_total (unshifted)')
+    src_word = "stitched" if source == "coeval" else "native"
+    ax1.plot(ell_dec, Dl_diag, color='tab:blue', lw=2, ls='--',
+             label=f'{src_word} P_diag (grouped, unshifted)')
+    ax1.plot(ell_dec, Dl_total, color='tab:red', lw=1.5,
+             label=f'{src_word} P_total (unshifted)')
     ax1.plot(ell_shift, Dl_total_shift, color='tab:green', lw=1.5, ls=':',
-              label='stitched P_total (shifted control)')
+              label=f'{src_word} P_total (shifted control)')
     ax1.set_xscale('log'); ax1.set_yscale('log')
     ax1.set_xlabel(r'$\ell$'); ax1.set_ylabel(r'$D_\ell$ [$\mu$K$^2$]')
     ax1.set_title('P_diag vs direct, fiducial resolution' if source == 'coeval'

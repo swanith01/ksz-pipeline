@@ -148,7 +148,10 @@ def gate2(run, meta, N, L_h, h, zre):
               f"{np.interp(ells[i], la, D(Ca, la)):.4f}")
     np.savez(os.path.join(run, 'amber_gate.npz'), ells=ells, D_compute_cell=Dl,
              D_amber_window=D_win, ell_amber=la, D_amber_full=D(Ca, la),
-             window=np.array([zt.min(), zt.max()]), frac_outside=outside)
+             window=np.array([zt.min(), zt.max()]), frac_outside=outside,
+             hist_z=np.array(sorted(res)),
+             hist_xH_vol=np.array([res[z]['xH_mean'] for z in sorted(res)]),
+             hist_xH_mass=np.array([res[z]['xH_mass'] for z in sorted(res)]))
     return ok_a and ok_b
 
 

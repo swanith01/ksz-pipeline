@@ -205,3 +205,37 @@ ls output/cmb/cl_ksz_healpix.txt
   snapshots. That changes the stitched method, though, so do it as an
   explicit variant, never silently.
 - **Sweep driver** (script 30+), mirroring script 14/17 patterns.
+
+## Reionization-history sweep (z_mid, Delta_z)
+
+```bash
+python scripts/40_run_amber_sweep.py --amber-x ~/amber/src/amber.x \
+    --reuse runs/amber_q01 --out-root runs/sweep
+python scripts/41_plot_amber_sweep.py --run runs/sweep
+```
+
+Two scenarios, same box/resolution as `amber_q01` throughout (256 Mpc/h,
+256^3), A_z fixed at 3:
+
+- **A**: z_mid fixed (default 8), Delta_z varying (default 2/4/6/8). A
+  clean relabeling of the SAME ionization pattern -- `reionization.f90`
+  evaluates the density/radiation field ranking cells once, at z_mid;
+  Delta_z only changes the ranking->redshift lookup. Isolates duration.
+- **B**: Delta_z fixed (default 4), z_mid varying (default 6/7/8/9/10).
+  NOT a pure relabeling -- the ranking field is re-evaluated at the new
+  z_mid each time, so morphology changes along with timing. Don't read
+  this as duration-only.
+
+The (z_mid=8, Delta_z=4) point is shared by both scenarios; `--reuse
+runs/amber_q01` reuses that already-validated run instead of redoing it.
+Map-making is off for every sweep point (not needed for a direct/P_qperp
+comparison, and adds the walltime cost documented above for no benefit
+here). Every point runs through `30_amber_validation_gate.py`
+automatically; a point that fails is excluded from the plot and reported,
+not silently included.
+
+Mechanics tested end-to-end (including the resume/reuse logic and a
+`cwd` bug in launching `amber.x` from a driver script rather than a
+shell that had already `cd`'d into the run directory) against a small
+gfortran-built AMBER in a sandbox, 2026-09-23. Not yet run at the real
+256^3 size or with the real (ifort/MKL/HEALPix) binary.

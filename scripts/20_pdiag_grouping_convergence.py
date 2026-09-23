@@ -78,12 +78,20 @@ from ksz_pipeline.utils.constants import ne0_cgs, MPC_CM
 N_GROUPS_SWEEP = [5, 8, 13, 20, 26, 35, 50, 75, 110, 165, 250, 400]
 
 
-def main(config_path, source):
+def main(config_path, source, hii_dim=None, box_len=None):
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
     sim_cfg = cfg['21cmfast']
     BOX_LEN = sim_cfg['BOX_LEN']
     HII_DIM = sim_cfg['HII_DIM_coeval']
+    if box_len is not None:
+        BOX_LEN = box_len
+    if hii_dim is not None:
+        HII_DIM = hii_dim
+    if box_len is not None or hii_dim is not None:
+        print(f"OVERRIDE: BOX_LEN={BOX_LEN}, HII_DIM={HII_DIM} (config values overridden "
+              f"for fast interactive testing -- do not trust absolute results at reduced "
+              f"resolution, this is a mechanics/shape check only)\n")
     z_min, z_max = sim_cfg['z_min'], sim_cfg['z_max']
     z_snapshots = sorted(cfg['coeval_ksz']['z_snapshots'])
     cache_dir = cfg['data']['cache_dir']
@@ -242,5 +250,9 @@ if __name__ == "__main__":
     parser.add_argument("--source", choices=["coeval", "native"], default="coeval",
                         help="lightcone data source; default preserves existing "
                              "behaviour exactly")
+    parser.add_argument("--hii-dim", type=int, default=None,
+                        help="override HII_DIM_coeval for fast interactive testing")
+    parser.add_argument("--box-len", type=float, default=None,
+                        help="override BOX_LEN for fast interactive testing")
     args = parser.parse_args()
-    main(args.config, args.source)
+    main(args.config, args.source, args.hii_dim, args.box_len)

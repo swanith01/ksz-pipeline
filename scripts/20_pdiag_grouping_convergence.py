@@ -31,9 +31,29 @@ Reuses the SAME theta_slices construction as script 17 (matched window,
 chi_eff, ne0_cgs), built ONCE, then swept cheaply across n_groups
 values -- the expensive ~20-50 GB per-slice step only happens once.
 
+ADDED 22 Sep 2026 -- --source {coeval,native}: the SAME grouping-
+convergence test, run on a lightcone from py21cmfast's own run_lightcone()
+instead of coeval boxes stitched by hand. Only the ONE call that builds
+`stitched` differs; everything downstream (tau, visibility, patchy mask,
+per-slice theta, the n_groups sweep, the plateau check, the plot) is
+untouched, because native_lightcone.stitch_lightcone_native() matches
+stitch_lightcone_from_coeval()'s output contract exactly (see that
+module's docstring). Default is still 'coeval' -- existing behaviour and
+output files are byte-for-byte unchanged unless --source native is passed
+explicitly. CAVEAT specific to the native path: the velocity unit
+conversion used there has NOT been independently validated in absolute
+amplitude (see native_lightcone.py's docstring) -- fine for THIS test,
+since a wrong overall scale factor cannot manufacture or hide a
+grouping-dependence plateau/non-plateau shape, but the 'direct D_3000'
+reference line plotted alongside is still the COEVAL-derived value from
+closure_test.npz and should not be read as a validated absolute match for
+the native curve -- shape comparison only, stated explicitly in the plot
+title and console output when --source native is used.
+
 Usage
 -----
     python scripts/20_pdiag_grouping_convergence.py --config configs/fiducial.yaml
+    python scripts/20_pdiag_grouping_convergence.py --config configs/fiducial.yaml --source native
 """
 import argparse
 import gc
@@ -46,6 +66,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from ksz_pipeline.ksz.stitch_from_coeval import stitch_lightcone_from_coeval, build_los_z_grid
+from ksz_pipeline.ksz.native_lightcone import stitch_lightcone_native
 from ksz_pipeline.ksz.optical_depth import (compute_tau, compute_visibility,
                                              analytic_tau_below, compute_patchy_mask)
 from ksz_pipeline.ksz.lightcone_integral import compute_ksz_map
@@ -57,7 +78,7 @@ from ksz_pipeline.utils.constants import ne0_cgs, MPC_CM
 N_GROUPS_SWEEP = [5, 8, 13, 20, 26, 35, 50, 75, 110, 165, 250, 400]
 
 
-def main(config_path):
+def main(config_path, source):
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
     sim_cfg = cfg['21cmfast']
@@ -80,20 +101,34 @@ def main(config_path):
     ell_direct, Dl_direct = closure['ell_direct'], closure['Dl_direct']
     d3000_direct = float(np.interp(3000, ell_direct, Dl_direct))
     print(f"chi_eff={chi_eff:.1f} Mpc, window z=[{z_lo:.2f},{z_hi:.2f}], "
-          f"direct D_3000={d3000_direct:.4g} uK^2\n")
+          f"direct D_3000={d3000_direct:.4g} uK^2 (coeval-derived; see native "
+          f"caveat below if --source native)\n")
 
-    print("Building stitched lightcone (fiducial scale, cache-hit expected)...")
-    cell_size = BOX_LEN / HII_DIM
-    z_arr = build_los_z_grid(z_min, z_max, cell_size)
-    stitched = stitch_lightcone_from_coeval(
-        z_snapshots=z_snapshots, z_arr=z_arr, HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
-        cache_dir=cache_dir, angle_deg=0.0,
-        N_THREADS=sim_cfg['N_THREADS'], random_seed=sim_cfg['random_seed'])
+    if source == 'coeval':
+        print("Building stitched lightcone (fiducial scale, cache-hit expected)...")
+        cell_size = BOX_LEN / HII_DIM
+        z_arr = build_los_z_grid(z_min, z_max, cell_size)
+        stitched = stitch_lightcone_from_coeval(
+            z_snapshots=z_snapshots, z_arr=z_arr, HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
+            cache_dir=cache_dir, angle_deg=0.0,
+            N_THREADS=sim_cfg['N_THREADS'], random_seed=sim_cfg['random_seed'])
+    else:  # source == 'native'
+        print("Building NATIVE lightcone via py21cmfast's own run_lightcone()...")
+        print("CAVEAT: velocity amplitude not independently validated for this "
+              "path -- see native_lightcone.py's docstring. Safe for THIS "
+              "grouping-convergence SHAPE test; do not read the 'direct D_3000' "
+              "line below as a validated absolute match.")
+        stitched = stitch_lightcone_native(
+            z_min=z_min, z_max=z_max, HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
+            cache_dir=cache_dir, angle_deg=0.0,
+            N_THREADS=sim_cfg['N_THREADS'], random_seed=sim_cfg['random_seed'])
+
     density_1plus = 1.0 + stitched['density']
     x_HII_field   = 1.0 - stitched['xH_box']
     v_los_Mpc_s   = stitched['velocity_z'] / MPC_CM
     x_e_interp    = 1.0 - stitched['xH_box'].mean(axis=(0, 1))
     pos_axis      = stitched['pos_axis']
+    z_arr         = stitched['z_arr']
 
     tau0 = analytic_tau_below(z_arr.min())
     z_mid, ds, dtau, tau = compute_tau(x_e_interp, z_arr, pos_axis, tau0=tau0)
@@ -169,35 +204,43 @@ def main(config_path):
             print(">>> P_diag still changing meaningfully even near n_groups=26 -- "
                   "the comparison to direct may be fragile, not yet well-defined.")
 
+    suffix = "" if source == 'coeval' else "_native"
+    title_suffix = "" if source == 'coeval' else " (NATIVE lightcone -- shape only, see caveat)"
+
     fig, ax = plt.subplots(figsize=(8, 6))
     ax.plot(n_groups_list, d3000_diag_vals, 'o-', color='tab:blue', label='P_diag D_3000')
-    ax.axhline(d3000_direct, color='k', ls='--', lw=1.5, label=f'direct D_3000={d3000_direct:.3g}')
+    ax.axhline(d3000_direct, color='k', ls='--', lw=1.5,
+               label=f'direct D_3000={d3000_direct:.3g} (coeval-derived)')
     ax.axvspan(15, 40, color='gray', alpha=0.15, label='range around n=26')
     ax.axvline(26, color='tab:orange', lw=1, ls=':')
     ax.set_xscale('log')
     ax.set_xlabel('number of radial groups')
     ax.set_ylabel(r'$D_{3000}$ [$\mu$K$^2$]')
-    ax.set_title('P_diag vs radial grouping: is n=26 a robust choice?')
+    ax.set_title(f'P_diag vs radial grouping: is n=26 a robust choice?{title_suffix}')
     ax.legend(fontsize=9)
     plt.tight_layout()
-    plot_path = f"{plot_dir}/pdiag_grouping_convergence.png"
+    plot_path = f"{plot_dir}/pdiag_grouping_convergence{suffix}.png"
     fig.savefig(plot_path, dpi=140, bbox_inches='tight')
     print(f"\nSaved -> {plot_path}")
 
     save_dict = dict(n_groups=n_groups_list, d3000_total=d3000_total_vals,
                       d3000_diag=d3000_diag_vals, d3000_direct=d3000_direct,
-                      chi_eff=chi_eff, z_lo=z_lo, z_hi=z_hi)
+                      chi_eff=chi_eff, z_lo=z_lo, z_hi=z_hi, source=source)
     for n_groups in n_groups_list:
         ell_dec, Dl_diag = curves[n_groups]
         save_dict[f"ell_n{n_groups}"] = ell_dec
         save_dict[f"Dl_diag_n{n_groups}"] = Dl_diag
-    np.savez(f"{out_dir}/pdiag_grouping_convergence.npz", **save_dict)
-    print(f"Saved -> {out_dir}/pdiag_grouping_convergence.npz "
+    npz_path = f"{out_dir}/pdiag_grouping_convergence{suffix}.npz"
+    np.savez(npz_path, **save_dict)
+    print(f"Saved -> {npz_path} "
           f"(includes full ell/Dl_diag curves per n_groups, keyed as 'ell_n<N>'/'Dl_diag_n<N>')")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/fiducial.yaml")
+    parser.add_argument("--source", choices=["coeval", "native"], default="coeval",
+                        help="lightcone data source; default preserves existing "
+                             "behaviour exactly")
     args = parser.parse_args()
-    main(args.config)
+    main(args.config, args.source)

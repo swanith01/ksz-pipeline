@@ -129,7 +129,16 @@ def stitch_lightcone_native(z_min, z_max, HII_DIM, BOX_LEN, cache_dir,
     lightcone = p21c.run_lightcone(
         redshift=float(z_min),
         max_redshift=float(z_max),
-        lightcone_quantities=("density", "xH_box", "velocity"),
+        # brightness_temp is NOT used by anything downstream of this
+        # function, but py21cmfast v3.3.1's LightCone.shape/.n_slices/
+        # .lightcone_distances/.lightcone_redshifts are all internally
+        # wired through self.brightness_temp.shape (outputs.py, confirmed
+        # by traceback 23 Sep 2026: AttributeError: 'LightCone' object has
+        # no attribute 'brightness_temp', raised from inside
+        # lightcone_redshifts itself) -- so it must be requested even
+        # though we discard it, or reading the axes alone crashes before
+        # density/xH_box/velocity are ever touched.
+        lightcone_quantities=("brightness_temp", "density", "xH_box", "velocity"),
         user_params=user_params,
         random_seed=random_seed,
         direc=cache_dir,

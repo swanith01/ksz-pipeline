@@ -58,9 +58,43 @@ reaching py21cmfast under the hood (open, unconfirmed question from
 earlier this session), this could still run single-threaded regardless
 of config -- request generous walltime.
 
+ADDED 23 Sep 2026 -- --source {coeval,native}: the SAME decomposition
+and Delta-chi periodicity test, run on a lightcone from py21cmfast's own
+run_lightcone() instead of coeval boxes stitched by hand. Only the ONE
+call that builds `stitched` differs -- everything downstream (tau,
+visibility, patchy mask, per-slice theta, the compute_ksz_map sanity
+check, snapshot grouping, the unshifted/shifted decomposition, the
+Delta-chi binning, the plot, the save) is untouched, because
+native_lightcone.stitch_lightcone_native() matches
+stitch_lightcone_from_coeval()'s output contract exactly (see that
+module's docstring -- confirmed working end-to-end on script 20's
+grouping-convergence test, 23 Sep 2026). Default is still 'coeval' --
+existing behaviour and output files are byte-for-byte unchanged unless
+--source native is passed explicitly.
+
+ONE THING DELIBERATELY NOT PORTED: the non-fiducial-box-size branch's
+"fresh coeval-direct reference" (coeval_sweep.run_one_config) has no
+native equivalent -- there is no "native_sweep.run_one_config" and
+building one is out of scope for what this test actually asks (does
+native P_off show the same box-size-dependent signature the coeval path
+showed, not does native match a resampled coeval-direct at arbitrary box
+sizes). For --source native, the 'direct' reference is ALWAYS
+closure_test.npz's fiducial-coeval Dl_direct regardless of box_len/
+hii_dim overrides -- a rough shape anchor only, never a validated match,
+same caveat already used in script 20 for the analogous case. Printed
+and stated explicitly, not silently assumed.
+
+VELOCITY CAVEAT (native path only): amplitude not independently
+validated -- see native_lightcone.py's docstring. An overall wrong scale
+factor rescales D_ell by that factor squared but cannot manufacture or
+hide the Delta-chi SHAPE (where a periodicity bump sits, whether it
+moves with box size) -- the thing this script's periodicity test
+actually asks about.
+
 Usage
 -----
     python scripts/17_coherence_decomposition_fiducial.py --config configs/fiducial.yaml
+    python scripts/17_coherence_decomposition_fiducial.py --config configs/fiducial.yaml --source native
 """
 import argparse
 import os
@@ -72,6 +106,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from ksz_pipeline.ksz.stitch_from_coeval import stitch_lightcone_from_coeval, build_los_z_grid
+from ksz_pipeline.ksz.native_lightcone import stitch_lightcone_native
 from ksz_pipeline.ksz.optical_depth import (compute_tau, compute_visibility,
                                              analytic_tau_below, compute_patchy_mask)
 from ksz_pipeline.ksz.lightcone_integral import compute_ksz_map, ksz_map_to_Dl
@@ -83,7 +118,7 @@ from ksz_pipeline.ksz.coherence_decomposition import (compute_ksz_map_per_slice,
 from ksz_pipeline.utils.constants import ne0_cgs, MPC_CM
 
 
-def main(config_path, seed_for_shift, box_len_override, hii_dim_override):
+def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source):
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
     sim_cfg = cfg['21cmfast']
@@ -106,9 +141,19 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override):
     os.makedirs(plot_dir, exist_ok=True)
 
     tag_suffix = "" if is_fiducial_config else f"_box{int(BOX_LEN)}"
+    if source == 'native':
+        tag_suffix += "_native"
     print(f"Coherence decomposition -- BOX_LEN={BOX_LEN} Mpc, "
-          f"HII_DIM={HII_DIM} (dx={dx_this_run:.4f} Mpc), {len(z_snapshots)} z_snapshots. "
+          f"HII_DIM={HII_DIM} (dx={dx_this_run:.4f} Mpc), {len(z_snapshots)} z_snapshots, "
+          f"source={source}. "
           f"{'FIDUCIAL config.' if is_fiducial_config else 'BOX-SIZE OVERRIDE -- periodicity test run.'}")
+    if source == 'native':
+        print("CAVEAT: velocity amplitude not independently validated for the native "
+              "path -- see native_lightcone.py's docstring. Fine for the Delta-chi "
+              "SHAPE test below; do not read absolute D_3000/cross-power values as "
+              "validated. The 'direct' reference plotted is ALWAYS closure_test.npz's "
+              "fiducial-coeval value regardless of this run's own box_len/hii_dim -- "
+              "a rough anchor only, see module docstring.")
 
     # ---- load the matched window + chi_eff from the closure test (script 14) --
     # these are LOS/redshift-only quantities, reused regardless of box size. ----
@@ -120,13 +165,17 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override):
     chi_eff = float(closure['chi_eff'])
     z_lo, z_hi = float(closure['z_lo']), float(closure['z_hi'])
 
-    if is_fiducial_config:
-        # Reuse script 14's own trusted direct curve directly.
+    if is_fiducial_config or source == 'native':
+        # Reuse script 14's own trusted direct curve directly. For native at a
+        # box-size override this is ALSO the fallback (see module docstring --
+        # no native equivalent of coeval_sweep.run_one_config exists or is
+        # needed for what this test asks).
         ell_direct, Dl_direct = closure['ell_direct'], closure['Dl_direct']
     else:
-        # Box size differs -- coeval-direct's own P_qperp depends on box
-        # size/resolution, so recompute a FRESH direct reference at THIS
-        # run's own (BOX_LEN, HII_DIM), same as script 16's quicktest does.
+        # Box size differs, coeval source -- coeval-direct's own P_qperp
+        # depends on box size/resolution, so recompute a FRESH direct
+        # reference at THIS run's own (BOX_LEN, HII_DIM), same as script 16's
+        # quicktest does.
         print(f"Computing a FRESH coeval-direct reference at BOX_LEN={BOX_LEN}, "
               f"HII_DIM={HII_DIM} (closure_test.npz's own Dl_direct is fiducial-"
               f"specific, not reusable here)...")
@@ -142,21 +191,30 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override):
           f"-- direct D_3000={d3000_direct:.4g} uK^2\n")
 
     # ================================================================
-    # stitched fields, fiducial scale, SAME cache_dir as everything
-    # else -- should cache-hit the already-built lightcone.
+    # stitched fields -- ONE call differs by source, everything else the
+    # same regardless of which loader built it (matching output contract)
     # ================================================================
-    print("Building stitched lightcone (fiducial scale)...")
-    cell_size = BOX_LEN / HII_DIM
-    z_arr = build_los_z_grid(z_min, z_max, cell_size)
-    stitched = stitch_lightcone_from_coeval(
-        z_snapshots=z_snapshots, z_arr=z_arr, HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
-        cache_dir=cache_dir, angle_deg=0.0,
-        N_THREADS=sim_cfg['N_THREADS'], random_seed=sim_cfg['random_seed'])
+    if source == 'coeval':
+        print("Building stitched lightcone (fiducial scale)...")
+        cell_size = BOX_LEN / HII_DIM
+        z_arr = build_los_z_grid(z_min, z_max, cell_size)
+        stitched = stitch_lightcone_from_coeval(
+            z_snapshots=z_snapshots, z_arr=z_arr, HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
+            cache_dir=cache_dir, angle_deg=0.0,
+            N_THREADS=sim_cfg['N_THREADS'], random_seed=sim_cfg['random_seed'])
+    else:  # source == 'native'
+        print("Building NATIVE lightcone via py21cmfast's own run_lightcone()...")
+        stitched = stitch_lightcone_native(
+            z_min=z_min, z_max=z_max, HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
+            cache_dir=cache_dir, angle_deg=0.0,
+            N_THREADS=sim_cfg['N_THREADS'], random_seed=sim_cfg['random_seed'])
+
     density_1plus = 1.0 + stitched['density']
     x_HII_field   = 1.0 - stitched['xH_box']
     v_los_Mpc_s   = stitched['velocity_z'] / MPC_CM
     x_e_interp    = 1.0 - stitched['xH_box'].mean(axis=(0, 1))
     pos_axis      = stitched['pos_axis']
+    z_arr         = stitched['z_arr']
 
     tau0 = analytic_tau_below(z_arr.min())
     z_mid, ds, dtau, tau = compute_tau(x_e_interp, z_arr, pos_axis, tau0=tau0)
@@ -185,7 +243,9 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override):
         visibility_3D_w, ne0=ne0_cgs(), patchy_mask_3D=patchy_mask_3D_w)
 
     # SANITY CHECK: per-slice sum reproduces the trusted compute_ksz_map,
-    # on the SAME windowed inputs script 14 itself used.
+    # on the SAME windowed inputs script 14 itself used. This checks OUR OWN
+    # per-slice math is self-consistent -- meaningful and free for either
+    # source, since it doesn't depend on which loader produced the fields.
     ksz_map_reference = compute_ksz_map(
         density_1plus_w, x_HII_field_w, v_los_Mpc_s_w, z_arr_w, ds_w,
         visibility_3D_w, ne0=ne0_cgs(), patchy_mask_3D=patchy_mask_3D_w)
@@ -226,7 +286,14 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override):
 
     frac_diff = abs(d3000_diag - d3000_direct) / d3000_direct
     print(f"\n|P_diag - direct| / direct = {frac_diff:.1%}")
-    if frac_diff > 0.3:
+    if source == 'native':
+        print(">>> --source native: this comparison uses closure_test.npz's "
+              "coeval-derived direct value as a rough anchor only (see module "
+              "docstring) -- a large fraction here is EXPECTED given the "
+              "unvalidated velocity amplitude, not necessarily a problem. "
+              "Proceed to the periodicity control and Delta-chi test below, "
+              "which do not depend on this absolute comparison.")
+    elif frac_diff > 0.3:
         print(">>> Still a substantial mismatch even with correct snapshot-level "
               "grouping. Per the theory note, P_diag was never GUARANTEED to equal "
               "direct exactly -- but a mismatch this large still likely means an "
@@ -272,14 +339,17 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override):
     # ================================================================
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5.5))
 
-    ax1.plot(ell_direct, Dl_direct, 'k-', lw=2, label='coeval-direct (script 14)')
+    direct_label = 'coeval-direct (script 14)' if source == 'coeval' else \
+                   'coeval-direct (script 14, ROUGH ANCHOR ONLY -- see caveat)'
+    ax1.plot(ell_direct, Dl_direct, 'k-', lw=2, label=direct_label)
     ax1.plot(ell_dec, Dl_diag, color='tab:blue', lw=2, ls='--', label='stitched P_diag (grouped, unshifted)')
     ax1.plot(ell_dec, Dl_total, color='tab:red', lw=1.5, label='stitched P_total (unshifted)')
     ax1.plot(ell_shift, Dl_total_shift, color='tab:green', lw=1.5, ls=':',
               label='stitched P_total (shifted control)')
     ax1.set_xscale('log'); ax1.set_yscale('log')
     ax1.set_xlabel(r'$\ell$'); ax1.set_ylabel(r'$D_\ell$ [$\mu$K$^2$]')
-    ax1.set_title('P_diag vs direct, fiducial resolution')
+    ax1.set_title('P_diag vs direct, fiducial resolution' if source == 'coeval'
+                  else f'P_diag vs direct, {source} source')
     ax1.legend(fontsize=8)
 
     valid = n_pairs > 0
@@ -292,7 +362,8 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override):
     ax2.axhline(0, color='k', lw=0.8, ls='--')
     ax2.set_xlabel(r'$|\Delta\chi|$ [Mpc]')
     ax2.set_ylabel('mean pairwise cross-power')
-    ax2.set_title('P_off vs radial separation: real vs shifted')
+    ax2.set_title('P_off vs radial separation: real vs shifted' if source == 'coeval'
+                  else f'P_off vs radial separation: real vs shifted ({source})')
     ax2.legend(fontsize=9)
 
     plt.tight_layout()
@@ -301,7 +372,7 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override):
     print(f"\nSaved -> {plot_path}")
 
     np.savez(f"{out_dir}/coherence_decomposition{tag_suffix or '_fiducial'}.npz",
-              box_len=BOX_LEN, hii_dim=HII_DIM,
+              box_len=BOX_LEN, hii_dim=HII_DIM, source=source,
               ell_direct=ell_direct, Dl_direct=Dl_direct, d3000_direct=d3000_direct,
               ell_dec=ell_dec, Dl_total=Dl_total, Dl_diag=Dl_diag, Dl_off=Dl_off,
               ell_shift=ell_shift, Dl_total_shift=Dl_total_shift,
@@ -323,5 +394,8 @@ if __name__ == "__main__":
                               "fiducial is 800/512, same dx=1.5625 Mpc)")
     parser.add_argument("--hii-dim", type=int, default=None,
                          help="Override HII_DIM -- see --box-len")
+    parser.add_argument("--source", choices=["coeval", "native"], default="coeval",
+                         help="lightcone data source; default preserves existing "
+                              "behaviour exactly")
     args = parser.parse_args()
-    main(args.config, args.shift_seed, args.box_len, args.hii_dim)
+    main(args.config, args.shift_seed, args.box_len, args.hii_dim, args.source)

@@ -68,6 +68,7 @@ from ksz_pipeline.ksz.optical_depth import (compute_tau, compute_visibility,
 from ksz_pipeline.ksz.coherence_decomposition import (compute_ksz_map_per_slice,
                                                        decompose_p_total_diag_off,
                                                        group_slices_by_snapshot)
+from ksz_pipeline.coeval.limber import compute_cell
 from ksz_pipeline.utils.constants import ne0_cgs, MPC_CM
 
 try:
@@ -78,6 +79,38 @@ except ImportError:
     plt = None
 
 log = logging.getLogger("stitched_dz")
+
+
+def _load_s23():
+    """For build_reference_results/self_consistent_window ONLY -- the fresh
+    per-multiple P_qperp/xH_mean computation and its near-threshold-snapshot
+    guard, both already built and tested for script 23's own gate. Reused
+    here rather than duplicated, same dynamic-import pattern already used in
+    scripts/24 and /27."""
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location(
+        "s23", os.path.join(here, "23_offdiag_projection.py"))
+    s23 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(s23)
+    return s23
+
+
+def fresh_direct_curve(s23, cfg, zs_m):
+    """P_direct recomputed from THIS multiple's own snapshot subset -- not
+    the single fixed value from closure_test.npz. Answers: does the
+    ALREADY-TRUSTED Limber calculation itself drift with snapshot count, or
+    is any drift specific to the stitching/interpolation machinery below?
+    Cheap: qperp_power on already-cached coeval boxes, no new simulation."""
+    ref = s23.build_reference_results(cfg, zs_m)
+    zs_ok = s23.self_consistent_window(ref)
+    if set(zs_ok) != set(zs_m):
+        log.warning("  fresh-direct: dropping %s (crossed patchy threshold "
+                   "at this snapshot subset's own xH_mean)",
+                   sorted(set(zs_m) - set(zs_ok)))
+    ref = {z: ref[z] for z in zs_ok}
+    ell_d, Dl_d, *_ = compute_cell(ref)
+    return ell_d, Dl_d
 
 
 def run_one_multiple(zs_m, cfg, chi_eff, z_lo, z_hi):
@@ -171,6 +204,7 @@ def main():
 
     z_snapshots = sorted(cfg["coeval_ksz"]["z_snapshots"])
     subsets = build_dz_subsets(z_snapshots, dz_multiples)
+    s23 = _load_s23()
 
     curves, rows = {}, []
     for m in sorted(dz_multiples):
@@ -178,17 +212,25 @@ def main():
         log.info("dz_x%d: stitching from %d snapshots...", m, len(zs_m))
         ell_dec, Dl_total, Dl_diag, Dl_off, n_groups = run_one_multiple(
             zs_m, cfg, chi_eff, z_lo, z_hi)
+
+        log.info("  computing fresh direct curve for this same snapshot subset...")
+        ell_dir_m, Dl_dir_m = fresh_direct_curve(s23, cfg, zs_m)
+        d3000_direct_m = float(np.interp(3000, ell_dir_m, Dl_dir_m))
+
         d3000_total = float(np.interp(3000, ell_dec, Dl_total))
         d3000_diag = float(np.interp(3000, ell_dec, Dl_diag))
         d3000_off = float(np.interp(3000, ell_dec, Dl_off))
-        frac_diff = abs(d3000_diag - d3000_direct) / d3000_direct
-        curves[m] = (ell_dec.copy(), Dl_total.copy(), Dl_diag.copy(), Dl_off.copy())
+        frac_diff = abs(d3000_diag - d3000_direct_m) / d3000_direct_m
+        curves[m] = (ell_dec.copy(), Dl_total.copy(), Dl_diag.copy(), Dl_off.copy(),
+                    ell_dir_m.copy(), Dl_dir_m.copy())
         rows.append(dict(m=m, n_snap=len(zs_m), n_groups=n_groups,
                          d3000_total=d3000_total, d3000_diag=d3000_diag,
-                         d3000_off=d3000_off, frac_diff=frac_diff))
-        log.info("  n_groups=%d  D_3000: total=%.4g diag=%.4g off=%.4g  "
-                 "|diag-direct|/direct=%.1f%%",
-                 n_groups, d3000_total, d3000_diag, d3000_off, frac_diff * 100)
+                         d3000_off=d3000_off, d3000_direct_m=d3000_direct_m,
+                         frac_diff=frac_diff))
+        log.info("  n_groups=%d  D_3000: direct(this subset)=%.4g total=%.4g "
+                 "diag=%.4g off=%.4g  |diag-direct_m|/direct_m=%.1f%%",
+                 n_groups, d3000_direct_m, d3000_total, d3000_diag, d3000_off,
+                 frac_diff * 100)
 
     total_vals = np.array([r["d3000_total"] for r in rows])
     total_spread = (total_vals.max() - total_vals.min()) / np.mean(np.abs(total_vals))
@@ -199,48 +241,51 @@ def main():
 
     diag_vals = np.array([r["d3000_diag"] for r in rows])
     diag_spread = (diag_vals.max() - diag_vals.min()) / np.mean(np.abs(diag_vals))
-    log.info("P_diag spread across dz_multiples = %.1f%% (all still compared "
-             "against the SAME direct D_3000=%.4g)", diag_spread * 100, d3000_direct)
+    direct_m_vals = np.array([r["d3000_direct_m"] for r in rows])
+    direct_m_spread = (direct_m_vals.max() - direct_m_vals.min()) / np.mean(np.abs(direct_m_vals))
+    log.info("P_diag spread across dz_multiples = %.1f%%", diag_spread * 100)
+    log.info("P_direct (recomputed fresh per subset) spread across dz_multiples "
+             "= %.1f%% -- if this is ALSO large, the sensitivity isn't specific "
+             "to stitching; even the trusted Limber calculation is sensitive to "
+             "how many z-slices it's given.", direct_m_spread * 100)
 
     outdir = args.outdir or os.path.join(cfg["data"]["plot_dir"].rstrip("/"),
                                          "28_stitched_dz")
     os.makedirs(outdir, exist_ok=True)
 
-    save_dict = dict(dz_multiples=sorted(dz_multiples), d3000_direct=d3000_direct,
+    save_dict = dict(dz_multiples=sorted(dz_multiples), d3000_direct_fixed=d3000_direct,
                      chi_eff=chi_eff, z_lo=z_lo, z_hi=z_hi)
     for m in dz_multiples:
-        ell_dec, Dl_total, Dl_diag, Dl_off = curves[m]
+        ell_dec, Dl_total, Dl_diag, Dl_off, ell_dir_m, Dl_dir_m = curves[m]
         save_dict[f"ell_dz_x{m}"] = ell_dec
         save_dict[f"Dl_total_dz_x{m}"] = Dl_total
         save_dict[f"Dl_diag_dz_x{m}"] = Dl_diag
         save_dict[f"Dl_off_dz_x{m}"] = Dl_off
+        save_dict[f"ell_direct_dz_x{m}"] = ell_dir_m
+        save_dict[f"Dl_direct_dz_x{m}"] = Dl_dir_m
     np.savez(f"{outdir}/stitched_dz_convergence.npz", **save_dict)
     log.info("Saved -> %s/stitched_dz_convergence.npz", outdir)
 
     if plt is not None:
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5.5))
-        for m in sorted(dz_multiples):
+        fig, ax1 = plt.subplots(figsize=(9, 7))
+        color_cycle = plt.cm.tab10(np.arange(len(dz_multiples)) % 10)
+        for color, m in zip(color_cycle, sorted(dz_multiples)):
             r = next(x for x in rows if x["m"] == m)
-            ell_dec, Dl_total, Dl_diag, Dl_off = curves[m]
-            ax1.plot(ell_dec, Dl_diag, "--", lw=1.5,
-                    label=f"P_diag, dz_x{m} ({r['n_snap']} snapshots)")
-        ax1.axhline(d3000_direct, color="k", ls="-", lw=2, label="coeval-direct D_3000")
+            ell_dec, Dl_total, Dl_diag, Dl_off, ell_dir_m, Dl_dir_m = curves[m]
+            n_snap = r["n_snap"]
+            ax1.plot(ell_dir_m, Dl_dir_m, "-", lw=2.5, color=color,
+                     label=f"P_direct, dz_x{m} ({n_snap} snap)")
+            ax1.plot(ell_dec, np.abs(Dl_total), "-", lw=0.9, color=color, alpha=0.75,
+                     label=f"P_total stitched, dz_x{m}")
+            ax1.plot(ell_dec, Dl_diag, ":", lw=2, color=color,
+                     label=f"P_diag, dz_x{m}")
         ax1.set_xscale("log"); ax1.set_yscale("log")
         ax1.set_xlabel(r"$\ell$"); ax1.set_ylabel(r"$D_\ell$ [$\mu K^2$]")
-        ax1.set_title("P_diag vs direct, across snapshot count")
-        ax1.legend(fontsize=7)
-
-        ms = [r["m"] for r in rows]
-        ax2.plot(ms, [r["d3000_total"] for r in rows], "o-", label="P_total")
-        ax2.plot(ms, [r["d3000_diag"] for r in rows], "s-", label="P_diag")
-        ax2.plot(ms, [r["d3000_off"] for r in rows], "^-", label="P_off")
-        ax2.axhline(d3000_direct, color="k", ls="--", label="coeval-direct")
-        ax2.set_xlabel("dz_multiple (coarser ->)")
-        ax2.set_ylabel(r"$D_{3000}$ [$\mu K^2$]")
-        ax2.set_title("D_3000 vs stitching snapshot count")
-        ax2.legend(fontsize=8)
-
-        plt.tight_layout()
+        ax1.set_title("P_direct / P_total / P_diag vs snapshot-sampling density\n"
+                      "(solid=direct, thin solid=total [abs], dotted=diag; "
+                      "color=dz_multiple)")
+        ax1.legend(fontsize=7, ncol=1)
+        fig.tight_layout()
         plot_path = f"{outdir}/stitched_dz_convergence.png"
         fig.savefig(plot_path, dpi=140)
         log.info("Saved -> %s", plot_path)

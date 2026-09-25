@@ -406,3 +406,22 @@ resolution (512, no override): ratio 1.0268, clean pass (19 Sep, job
 estimator must use hii_dim>=512 to be trusted; 128 and similar are fine only
 for mechanical/structural testing (does it run, does it plot), never for
 trusting the actual numbers.
+
+## Limber approximation for D_ell -- VALIDATED (30 Sep 2026)
+
+Three independent checks converge: (1) corrected non-Limber estimator's
+diagonal vs. compute_cell's formula at true fiducial resolution (512),
+ratio 1.0268; (2) formula vs. the native map's own directly-measured
+P_diag, ratio 1.049 -- separate code path, no shared machinery with (1);
+(3) Alvarez+16 (arXiv:1511.02846)'s own stated Doppler-peak (ell~20-30)
+and an independent re-derivation from this repo's own cosmology (ell~5.6
+to ~14.8 across the window) agree in order of magnitude, and both sit
+below this box's own resolvable ell_min -- explaining the low-ell
+departure seen in the plots rather than contradicting the validation.
+
+Full writeup: docs/CHECKPOINT_2026-09-30_limber_approximation_validated.md
+Tag: limber-check-2026-09-30
+
+Scope note: this does NOT cover dz-convergence (snapshot-sampling-density)
+sensitivity -- scripts 27/28 show real, unresolved sensitivity there,
+still open as of this entry.

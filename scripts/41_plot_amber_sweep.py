@@ -1,8 +1,8 @@
 """
 scripts/41_plot_amber_sweep.py
 
-Two-panel comparison figures from scripts/40_run_amber_sweep.py's output,
-per scenario:
+Two-panel comparison figure per scenario, from scripts/40_run_amber_sweep.py's
+output (any number of named scenarios, not hardcoded to two):
   LEFT:  patchy-kSZ D_ell, both methods -- solid = our compute_cell,
          dashed = AMBER's own native P_qperp+Limber (same window). Two
          independently-written codes per sweep point, not just ours.
@@ -11,15 +11,14 @@ per scenario:
          as the left panel -- so a rise/shift on the right can be read
          directly against the D_ell change it causes on the left.
 
-  A: one curve per Delta_z, at fixed z_mid -- a clean duration-only
-     comparison (see 40_run_amber_sweep.py's docstring).
-  B: one curve per z_mid, at fixed Delta_z -- timing AND morphology both
-     changing; don't read this as duration-only.
+Each point's legend label is whatever 40_run_amber_sweep.py's point()
+set (e.g. "dz=12.8 (max, Sec 5.2)" for a point that also overrides other
+parameters) -- not reconstructed from the swept axis value alone, so an
+overridden point's label stays honest about what actually differs.
 
 Usage:
   python scripts/41_plot_amber_sweep.py --run runs/sweep
-  # -> data/plots/<run>_scenarioA_delta_z.png
-  # -> data/plots/<run>_scenarioB_z_mid.png
+  # -> data/plots/<run>_<scenario_name>.png, one per scenario in the npz
 """
 import argparse
 import json
@@ -30,29 +29,34 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 
+CMAPS = ['viridis', 'plasma', 'cividis', 'magma']
 
-def _load_scenario(d, scen):
-    n = int(d[f'{scen}_n'])
+
+def _scenario_names(d):
+    return sorted({k[:-len('_axis')] for k in d.files if k.endswith('_axis')})
+
+
+def _load_scenario(d, name):
+    n = int(d[f'{name}_n'])
     pts = []
     for i in range(n):
         pts.append(dict(
-            zmid=float(d[f'{scen}_zmid'][i]), zdel=float(d[f'{scen}_zdel'][i]),
-            ells=d[f'{scen}_{i}_ells'], D=d[f'{scen}_{i}_Dcc'],
-            D_amber=d[f'{scen}_{i}_Dwin'], window=d[f'{scen}_{i}_window'],
-            hist_z=d[f'{scen}_{i}_hist_z'], hist_xH=d[f'{scen}_{i}_hist_xH']))
-    return pts
+            axisval=float(d[f'{name}_{i}_axisval']),
+            label=str(d[f'{name}_{i}_label']),
+            ells=d[f'{name}_{i}_ells'], D=d[f'{name}_{i}_Dcc'],
+            D_amber=d[f'{name}_{i}_Dwin'], window=d[f'{name}_{i}_window'],
+            hist_z=d[f'{name}_{i}_hist_z'], hist_xH=d[f'{name}_{i}_hist_xH']))
+    return sorted(pts, key=lambda p: p['axisval'])
 
 
-def _plot_scenario(pts, label_fn, sort_key, title, out_path, cmap='viridis'):
-    pts = sorted(pts, key=sort_key)
+def _plot_scenario(pts, title, out_path, cmap='viridis'):
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
     fig, (left, right) = plt.subplots(1, 2, figsize=(12, 5.5))
     colors = plt.get_cmap(cmap)(np.linspace(0.15, 0.9, len(pts)))
 
     for p, c in zip(pts, colors):
-        left.loglog(p['ells'], p['D'], '-', color=c, lw=1.8,
-                   label=label_fn(p))
-        left.loglog(p['ells'], p['D_amber'], '--', color=c, lw=1.2,
-                   alpha=0.7)
+        left.loglog(p['ells'], p['D'], '-', color=c, lw=1.8, label=p['label'])
+        left.loglog(p['ells'], p['D_amber'], '--', color=c, lw=1.2, alpha=0.7)
     left.set_xlabel(r'$\ell$')
     left.set_ylabel(r'$D_\ell$  [$\mu$K$^2$]')
     left.set_title('patchy kSZ (solid = ours, dashed = AMBER native)')
@@ -60,7 +64,7 @@ def _plot_scenario(pts, label_fn, sort_key, title, out_path, cmap='viridis'):
 
     for p, c in zip(pts, colors):
         right.plot(p['hist_z'], p['hist_xH'], '-', color=c, lw=1.8,
-                  label=label_fn(p))
+                  label=p['label'])
         z1, z2 = p['window']
         right.axvspan(z1, z2, color=c, alpha=0.06)
     right.set_xlabel(r'$z$')
@@ -90,32 +94,22 @@ def main():
     meta_path = os.path.join(a.run, 'sweep_meta.json')
     meta = json.load(open(meta_path)) if os.path.exists(meta_path) else {}
     run_name = os.path.basename(os.path.normpath(a.run))
-    box_str = (f"L={meta['L']:.0f} Mpc/h, N={meta['N']}"
+    box_str = (f"L={meta['L']:.0f} Mpc/h, N={meta['N']}, "
+              f"cosmology={meta.get('cosmology', '?')}"
               if 'L' in meta else '')
+    axis_labels = meta.get('axis_labels', {})
 
-    A = _load_scenario(d, 'A')
-    if A:
+    for i, name in enumerate(_scenario_names(d)):
+        pts = _load_scenario(d, name)
+        if not pts:
+            print(f"{name}: no validated points, skipping")
+            continue
+        axis_lbl = axis_labels.get(name, name)
         _plot_scenario(
-            A, lambda p: f"$\\Delta z$={p['zdel']:.1f}", lambda p: p['zdel'],
-            f"Scenario A: fixed z$_{{mid}}$={A[0]['zmid']:.1f}, "
-            f"varying $\\Delta z$  ({box_str})",
-            os.path.join('data', 'plots', f'{run_name}_scenarioA_delta_z.png'))
-    else:
-        print("Scenario A: no validated points, skipping")
-
-    B = _load_scenario(d, 'B')
-    if B:
-        _plot_scenario(
-            B, lambda p: f"z$_{{mid}}$={p['zmid']:.1f}", lambda p: p['zmid'],
-            f"Scenario B: fixed $\\Delta z$={B[0]['zdel']:.1f}, "
-            f"varying z$_{{mid}}$  ({box_str})  -- NOT duration-only, "
-            f"see script docstring",
-            os.path.join('data', 'plots', f'{run_name}_scenarioB_z_mid.png'),
-            cmap='plasma')
-    else:
-        print("Scenario B: no validated points, skipping")
+            pts, f"Scenario '{name}': varying {axis_lbl}  ({box_str})",
+            os.path.join('data', 'plots', f'{run_name}_{name}.png'),
+            cmap=CMAPS[i % len(CMAPS)])
 
 
 if __name__ == '__main__':
     main()
-

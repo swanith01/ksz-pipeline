@@ -30,24 +30,55 @@ import os
 
 import numpy as np
 from astropy import units as u
-from astropy.cosmology import Planck18 as P18
+from astropy.cosmology import Planck18, FlatLambdaCDM
 from scipy.integrate import quad
 
 C_KMS = 299792.458
-NE0_REPO = 2.064357e-07      # ne0_cgs() value quoted in validation_table §4
 
+# Each preset returns (p, target) where p is AMBER's own parameter dict
+# and target is the astropy Cosmology instance everything (check_distances,
+# ne0, and compute_cell downstream) must be compared/matched against --
+# keeping them paired here is what stops a cosmology override drifting
+# out of sync with its own ne0, the exact bug class flagged in
+# compute_cell's cosmology= docstring.
 
 def planck18_for_amber():
     """Planck18 -> AMBER's (om, ol, ob, or) with AMBER's H(z) form.
     Massive neutrino (0.06 eV) is non-relativistic at z < 20 -> matter;
     photons + massless neutrinos -> radiation; flat by construction."""
+    P18 = Planck18
     nu_rel = P18.Ogamma0 * 0.22710731766 * P18.Neff * (2.0 / 3.0)  # 2 massless
     orad = P18.Ogamma0 + nu_rel
     ol = P18.Ode0
     om = 1.0 - ol - orad
-    return dict(om=om, ol=ol, ob=P18.Ob0, orad=orad, h=P18.h,
-                s8=P18.meta['sigma8'], ns=P18.meta['n'],
-                Tcmb=P18.Tcmb0.value)
+    p = dict(om=om, ol=ol, ob=P18.Ob0, orad=orad, h=P18.h,
+             s8=P18.meta['sigma8'], ns=P18.meta['n'], Tcmb=P18.Tcmb0.value,
+             mnu=0.06)
+    return p, P18
+
+
+def chen2022_for_amber():
+    """Chen, Trac, Mukherjee & Cen 2023 (arXiv:2203.04337) fiducial
+    cosmology: [Om,Ob,s8,ns,h] = [0.3, 0.045, 0.8, 0.96, 0.7] -- the same
+    AMBER paper this pipeline's fiducial (z_mid,dz,Az)=(8,4,3) matches.
+    No massive-neutrino / Tcmb0 / Neff statement in the paper; assumed
+    standard (Tcmb0=2.725, Neff=3.046, massless) since nothing suggests
+    otherwise -- flag this assumption if a precision match ever matters
+    beyond kSZ D_ell comparisons."""
+    target = FlatLambdaCDM(H0=70.0, Om0=0.3, Ob0=0.045, Tcmb0=2.725,
+                           Neff=3.046)
+    nu_rel = target.Ogamma0 * 0.22710731766 * target.Neff
+    orad = target.Ogamma0 + nu_rel
+    ol = target.Ode0
+    om = 1.0 - ol - orad
+    p = dict(om=om, ol=ol, ob=target.Ob0, orad=orad, h=target.h,
+             s8=0.8, ns=0.96, Tcmb=target.Tcmb0.value,
+             mnu=0.0)  # assumed massless, see docstring
+    return p, target
+
+
+COSMOLOGY_PRESETS = {'planck18': planck18_for_amber,
+                     'chen2022': chen2022_for_amber}
 
 
 def chi_amber(z, p):
@@ -57,12 +88,13 @@ def chi_amber(z, p):
     return C_KMS / (100.0 * p['h']) * quad(lambda zz: 1.0 / E(zz), 0, z)[0]
 
 
-def check_distances(p, tol=1e-3):
+def check_distances(p, target, tol=1e-3):
     zs = np.arange(4.0, 20.01, 1.0)
-    rel = np.array([chi_amber(z, p) / P18.comoving_distance(z).value - 1
+    rel = np.array([chi_amber(z, p) / target.comoving_distance(z).value - 1
                     for z in zs])
     worst = np.abs(rel).max()
-    print(f"chi(z) AMBER-vs-Planck18, z=4..20: max |rel diff| = {worst:.2e}")
+    print(f"chi(z) AMBER-vs-target cosmology, z=4..20: max |rel diff| = "
+         f"{worst:.2e}")
     if worst > tol:
         raise SystemExit(f"cosmology mismatch {worst:.2e} > {tol:.0e}")
 
@@ -77,15 +109,23 @@ def shell_midpoints(zmin, zmax, zdel, spacing):
     return (1 + zmin) * 10**(dlg * (np.arange(nz) + 0.5)) - 1
 
 
-def check_ne0(p, XH, YHe):
-    rho_b = (P18.critical_density0 * P18.Ob0).to(u.g / u.cm**3).value
+def check_ne0(p, target, XH, YHe):
+    """Returns the computed ne0 [cm^-3] -- the caller passes THIS to
+    compute_cell(ne0=...), not the repo's Planck18-derived constant,
+    whenever target isn't Planck18. Printed regardless so it's always
+    visible which value a run actually used."""
+    rho_b = (target.critical_density0 * target.Ob0).to(u.g / u.cm**3).value
     mp = 1.67262192e-24
     ne0 = rho_b / mp * (XH + YHe / 4.0)
-    rel = ne0 / NE0_REPO - 1
-    print(f"n_e0 (H + singly-ionized He) = {ne0:.6e} cm^-3 ; repo "
-          f"ne0_cgs() = {NE0_REPO:.6e} ; rel diff {rel:+.2e}")
-    if abs(rel) > 5e-3:
-        raise SystemExit("XH/YHe/Ob inconsistent with repo ne0_cgs()")
+    print(f"n_e0 (H + singly-ionized He) = {ne0:.6e} cm^-3  "
+         f"[target cosmology: Ob={target.Ob0:.5f}, h={target.h:.4f}]")
+    if target is Planck18:
+        NE0_REPO = 2.064357e-07  # ne0_cgs() value, validation_table §4
+        rel = ne0 / NE0_REPO - 1
+        print(f"  vs repo ne0_cgs() = {NE0_REPO:.6e} ; rel diff {rel:+.2e}")
+        if abs(rel) > 5e-3:
+            raise SystemExit("XH/YHe/Ob inconsistent with repo ne0_cgs()")
+    return ne0
 
 
 def eh_nowiggle_T(k_h, p):
@@ -107,13 +147,15 @@ def eh_nowiggle_T(k_h, p):
 
 
 def write_linpowspec(path, p):
-    """z=0 linear Delta^2(k), k in h/Mpc, via CAMB. AMBER renormalizes to
-    s8 itself (cosmology.f90), so only the SHAPE must be Planck18."""
+    """z=0 linear Delta^2(k), k in h/Mpc, via CAMB, using THIS preset's
+    own (Ob, Om, ns) -- AMBER renormalizes the amplitude to s8 itself
+    (cosmology.f90), but the shape (Ob/Om ratio, ns) is not free and
+    must match p, not be hardcoded to one preset."""
     import camb
     pars = camb.set_params(H0=100 * p['h'],
-                           ombh2=P18.Ob0 * p['h']**2,
-                           omch2=(P18.Om0 - P18.Ob0) * p['h']**2,
-                           mnu=0.06, ns=p['ns'], As=2.1e-9, WantTransfer=True,
+                           ombh2=p['ob'] * p['h']**2,
+                           omch2=(p['om'] - p['ob']) * p['h']**2,
+                           mnu=p['mnu'], ns=p['ns'], As=2.1e-9, WantTransfer=True,
                            kmax=200.0)
     pars.set_matter_power(redshifts=[0.0], kmax=200.0)
     res = camb.get_results(pars)
@@ -258,11 +300,20 @@ def main():
     ap.add_argument('--XH', type=float, default=0.76)
     ap.add_argument('--YHe', type=float, default=0.24)
     ap.add_argument('--no-camb', action='store_true')
+    ap.add_argument('--cosmology', choices=sorted(COSMOLOGY_PRESETS),
+                    default='planck18',
+                    help="'planck18' (default, matches compute_cell's "
+                         "hardcoded default) or 'chen2022' (Chen et al. "
+                         "2023 AMBER-kSZ paper's fiducial cosmology). "
+                         "Whatever is NOT planck18 must be passed to "
+                         "compute_cell(cosmology=..., ne0=...) explicitly "
+                         "-- see amber_run.json's 'ne0_cgs' and "
+                         "'cosmology_preset' for the exact matched values.")
     a = ap.parse_args()
 
-    p = planck18_for_amber()
-    check_distances(p)
-    check_ne0(p, a.XH, a.YHe)
+    p, target = COSMOLOGY_PRESETS[a.cosmology]()
+    check_distances(p, target)
+    ne0 = check_ne0(p, target, a.XH, a.YHe)
 
     zm = shell_midpoints(a.czmin, a.czmax, a.czdel, a.cspacing)
     tags = [f"{z:05.2f}" for z in zm]
@@ -288,12 +339,17 @@ def main():
         f.write(txt)
     if not a.no_camb:
         write_linpowspec(os.path.join(a.out, 'input', 'linpowspec.txt'), p)
-    meta = dict(vars(a), cosmology='astropy Planck18', amber_params=p,
-                snapshot_z=zm.tolist())
+    meta = dict(vars(a), cosmology_preset=a.cosmology, amber_params=p,
+                ne0_cgs=ne0, snapshot_z=zm.tolist())
     with open(os.path.join(a.out, 'amber_run.json'), 'w') as f:
         json.dump(meta, f, indent=2)
     print(f"wrote {a.out}/input/input.txt, amber_run.json"
           + ("" if a.no_camb else ", input/linpowspec.txt"))
+    if a.cosmology != 'planck18':
+        print(f"NOTE: cosmology={a.cosmology} -- downstream compute_cell "
+             f"calls need cosmology=<matching astropy instance>, "
+             f"ne0={ne0:.6e} passed explicitly, or they will silently "
+             f"fall back to Planck18.")
 
 
 if __name__ == '__main__':

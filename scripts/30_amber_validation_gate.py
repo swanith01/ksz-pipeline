@@ -33,8 +33,14 @@ import os
 import sys
 
 import numpy as np
-from astropy.cosmology import Planck18 as P18
+import astropy.units as u
 from scipy.interpolate import CubicSpline
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from make_amber_input import chi_amber   # AMBER's own H(z), not astropy's
+                                         # -- exact match to whatever
+                                         # cosmology the run actually used,
+                                         # no Neff/m_nu reconstruction needed
 
 from ksz_pipeline.amber import io, adapter
 from ksz_pipeline.coeval.limber import compute_cell
@@ -84,7 +90,17 @@ def gate2(run, meta, N, L_h, h, zre):
     t = np.loadtxt(os.path.join(cmb, 'tau.txt'), skiprows=1)
     la, Ca = io.read_amber_cl(os.path.join(cmb, 'cl_ksz.txt'))
     xe = adapter.electron_fraction_amber(meta['XH'], meta['YHe'])
-    ne0_amber = ne0_cgs() / xe                      # nH + 2 nHe
+    # meta['ne0_cgs'] is saved by make_amber_input.py for whichever
+    # cosmology this run actually used -- NOT the repo's Planck18-only
+    # ne0_cgs() constant, which would silently mismatch a non-Planck18 run.
+    # Runs generated before this field existed (e.g. the original
+    # amber_q01) always used Planck18, so that's the correct fallback --
+    # not a guess.
+    if 'ne0_cgs' not in meta:
+        print("  (amber_run.json predates ne0_cgs field -- falling back "
+             "to Planck18's value, correct for any pre-existing run)")
+    ne0_amber = meta.get('ne0_cgs', ne0_cgs()) / xe  # nH + 2 nHe
+    ap = meta['amber_params']
 
     pw = sorted(glob.glob(os.path.join(cmb, 'power_z=*.txt')), key=io.z_from_name)
     zs = np.array([io.z_from_name(f) for f in pw])
@@ -96,9 +112,8 @@ def gate2(run, meta, N, L_h, h, zre):
             if not (zlo - 1e-9 <= z <= zhi + 1e-9):
                 continue
             z1, z2 = shell_edges(z, meta['czdel'], meta['cspacing'], meta['czmin'])
-            r = P18.comoving_distance(z).value * h                      # Mpc/h
-            dr = (P18.comoving_distance(z2).value
-                  - P18.comoving_distance(z1).value) * h
+            r = chi_amber(z, ap) * h                                    # Mpc/h
+            dr = (chi_amber(z2, ap) - chi_amber(z1, ap)) * h
             a = 1 / (1 + z)
             tau = np.interp(z, t[:, 0], t[:, 2])
             # AMBER evaluates P_qq(k=l/r) with a NATURAL cubic spline
@@ -127,8 +142,18 @@ def gate2(run, meta, N, L_h, h, zre):
     # from the repo's fixed analytic model -- see adapter.tau_below_amber.
     zwin = min(z for z in res
                if 1e-4 <= res[z]['xH_mean'] <= 1 - 1e-4)
+    # compute_cell must use the SAME cosmology/ne0 as amber_sum above, or
+    # gate 2b compares two different cosmologies and "fails" for a reason
+    # that has nothing to do with the pipeline. A minimal duck-typed
+    # wrapper is enough -- compute_cell only ever calls
+    # .comoving_distance(z).value, so this avoids reconstructing a full
+    # astropy Cosmology (Neff/m_nu) from meta just for this one call.
+    class _AmberCosmo:
+        def comoving_distance(self, z):
+            return chi_amber(z, ap) * u.Mpc
     ells, Dl, _, _, _, (zt, _), _ = compute_cell(
-        res, tau0=adapter.tau_below_amber(cmb, zwin))
+        res, tau0=adapter.tau_below_amber(cmb, zwin),
+        cosmology=_AmberCosmo(), ne0=meta.get('ne0_cgs', ne0_cgs()))
     Cwin = amber_sum(zt.min(), zt.max())
     i3 = int(np.argmin(np.abs(ells - 3000)))
     D_win = np.interp(ells, la, D(Cwin, la))

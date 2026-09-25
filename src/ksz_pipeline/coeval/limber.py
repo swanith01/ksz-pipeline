@@ -38,7 +38,8 @@ def _interp_loglog(xq, xp, fp):
     return np.exp(np.interp(lq, lx, lf))
 
 
-def compute_cell(results_qperp, ells_full=None, ne0=None, tau0=None):
+def compute_cell(results_qperp, ells_full=None, ne0=None, tau0=None,
+                  cosmology=None):
     """
     Compute C_ell and D_ell from cached P_{q_perp} results.
 
@@ -64,6 +65,17 @@ def compute_cell(results_qperp, ells_full=None, ne0=None, tau0=None):
         tau0 constant when the true value moves with the history, biasing
         e^{-2tau} differently in each run. AMBER writes its own tau(z) to
         output/cmb/tau.txt (see ksz_pipeline.amber.adapter.tau_below_amber).
+    cosmology : astropy Cosmology instance, optional
+        Default None -> the module's Planck18, unchanged behaviour. Pass
+        this when comparing against a run built with a DIFFERENT
+        cosmology (e.g. reproducing a paper's own [Om,Ob,h,ns,s8]) --
+        Planck18's comoving_distance(z) would otherwise silently mismatch
+        the box's own expansion history. Must be paired with a
+        consistent ne0 (ne0 depends on Ob*h^2, not just h): a cosmology
+        override with the default Planck18 ne0 is exactly the kind of
+        half-applied fix this pipeline has hit before. See
+        ksz_pipeline.amber.adapter for a helper that builds both from
+        AMBER's own input parameters together.
 
     Returns
     -------
@@ -77,6 +89,7 @@ def compute_cell(results_qperp, ells_full=None, ne0=None, tau0=None):
     """
     if ne0 is None:
         ne0 = ne0_cgs()
+    cosmo_use = cosmology if cosmology is not None else cosmo
 
     if ells_full is None:
         ells_full = np.unique(
@@ -98,7 +111,7 @@ def compute_cell(results_qperp, ells_full=None, ne0=None, tau0=None):
                                                   <= XHI_MAX_PATCHY]),
                        dtype=float)
 
-    chi_mpc  = np.array([cosmo.comoving_distance(z).value for z in ZS_asc])
+    chi_mpc  = np.array([cosmo_use.comoving_distance(z).value for z in ZS_asc])
     dchi_mpc = np.abs(np.gradient(chi_mpc))
     dchi_cm  = dchi_mpc * MPC_CM
 

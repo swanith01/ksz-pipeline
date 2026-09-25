@@ -1,35 +1,42 @@
 """
 scripts/40_run_amber_sweep.py
 
-Runs a set of AMBER configurations at FIXED box size and resolution,
-varying only the reionization-history parameters, and validates each one
-(scripts/30_amber_validation_gate.py) before trusting it. Two scenarios,
-per the original handoff's step 5:
+Runs a set of AMBER configurations at FIXED box size, resolution and
+cosmology, validates each one (scripts/30_amber_validation_gate.py)
+before trusting it, and collects D_ell + reionization-history curves for
+scripts/41_plot_amber_sweep.py.
 
-  A: z_mid FIXED, Delta_z varying   -- a clean relabeling of the SAME
-     ionization pattern (see reionization.f90: the density/radiation
-     field ranking cells is evaluated once, at z_mid; only the ranking
-     ->redshift lookup changes with Delta_z). Isolates duration.
-  B: Delta_z FIXED, z_mid varying   -- NOT a pure relabeling: the ranking
-     field is re-evaluated at the new z_mid each time, so morphology
-     changes along with timing. Don't over-read this as a "duration only"
-     sweep.
+A scenario is a NAMED list of points; each point is a full parameter
+dict (zmid, zdel, zasy, Mmin, mfp), built by overriding a fiducial. This
+(not two hardcoded scenarios) is needed even for a plain z_mid or Delta_z
+sweep, because some comparisons need one point to differ in MORE than the
+swept axis -- e.g. reproducing Chen, Trac, Mukherjee & Cen 2023's
+(arXiv:2203.04337) Figure 10 middle panel, whose Delta_z=12.8 point also
+uses z_mid=6.5, A_z=8, mfp=1 Mpc/h (their Sec 5.2), not the fiducial
+z_mid/A_z/mfp the rest of that panel shares.
 
-Resumable: a config already at amber_gate.npz is read, not rerun --
-lets this reuse an existing, already-validated run (e.g. amber_q01) for
-whatever point the two scenarios share, and lets this script be
+Built-in scenario definitions reproduce that paper's Figure 10 exactly
+(see CHEN2023_FIG10_SCENARIOS below); pass --scenarios-json for anything
+else. Their fiducial [z_mid, Delta_z, A_z, Mh, mfp] = [8.0, 4.0, 3.0,
+1e8, 3.0] is also this repo's own fiducial (amber_q01) -- not a
+coincidence worth re-deriving, just confirms that choice was reasonable.
+
+Resumable: a config already at amber_gate.npz is read, not rerun -- lets
+this reuse an existing, already-validated run (e.g. amber_q01) for
+whatever point matches its exact parameters, and lets this script be
 re-launched after a partial failure without redoing finished work.
 Map-making is deliberately OFF for every point here (no --mapmake) --
 this compares the direct/P_qperp method only, and map-making's walltime
 cost (see docs/amber_integration.md) has nothing to do with this question.
 
 Usage:
-  python scripts/40_run_amber_sweep.py --amber-x ~/amber/src/amber.x \\
-      --reuse runs/amber_q01 --out-root runs/sweep
+  python scripts/40_run_amber_sweep.py --amber-x ~/amber/src/amber.x \
+      --reuse runs/amber_q01 --out-root runs/sweep --cosmology chen2022
 
 Writes runs/sweep/sweep_results.npz for scripts/41_plot_amber_sweep.py.
 """
 import argparse
+import glob
 import json
 import os
 import subprocess
@@ -40,13 +47,46 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+FIDUCIAL = dict(zmid=8.0, zdel=4.0, zasy=3.0, Mmin=1e8, mfp=3.0)
+
+
+def point(label, **overrides):
+    p = dict(FIDUCIAL)
+    p.update(overrides)
+    p['label'] = label
+    return p
+
+
+# Chen, Trac, Mukherjee & Cen 2023 Figure 10: z_mid, Delta_z (+ one
+# special-parameter point), and A_z panels, at their stated fiducial.
+CHEN2023_FIG10_SCENARIOS = {
+    'z_mid': {
+        'axis': 'zmid', 'axis_label': r'z$_{mid}$',
+        'points': [point(f"zmid={v}", zmid=v)
+                  for v in [7.0, 7.5, 8.0, 8.5, 9.0]],
+    },
+    'delta_z': {
+        'axis': 'zdel', 'axis_label': r'$\Delta z$',
+        'points': [point(f"dz={v}", zdel=v) for v in [2, 3, 4, 5, 6]]
+                 + [point("dz=12.8 (max, Sec 5.2)", zdel=12.8, zmid=6.5,
+                          zasy=8.0, mfp=1.0)],
+    },
+    'asymmetry': {
+        'axis': 'zasy', 'axis_label': r'A$_z$',
+        'points': [point(f"Az={v}", zasy=v) for v in [1, 2, 3, 5, 8]],
+    },
+}
+
+
+def tag_for(p):
+    def fmt(x):
+        return f"{x:g}".replace('.', 'p').replace('-', 'm')
+    return (f"zmid{fmt(p['zmid'])}_dz{fmt(p['zdel'])}_az{fmt(p['zasy'])}"
+           f"_mh{fmt(np.log10(p['Mmin']))}_mfp{fmt(p['mfp'])}")
+
 
 def cfg_dir(root, tag):
     return os.path.join(root, tag)
-
-
-def tag_for(zmid, zdel):
-    return f"zmid{zmid:04.1f}_dz{zdel:04.1f}".replace('.', 'p')
 
 
 REQUIRED_NPZ_KEYS = {'ells', 'D_compute_cell', 'D_amber_window', 'window',
@@ -65,21 +105,35 @@ def _npz_is_complete(npz_path):
 
 
 def _glob_fields(d):
-    import glob
     return glob.glob(os.path.join(d, 'output', 'cmb', 'fields_*.dat'))
 
 
-def run_one(root, zmid, zdel, zasy, L, N, ncore, amber_x, python_exe,
+def _matches_reuse(p, reuse_dir):
+    """True if reuse_dir's own amber_run.json states EXACTLY this point's
+    parameters -- not just "the fixed point of some scenario", so a
+    Delta_z=12.8-style override with a different z_mid/A_z/mfp is never
+    mistaken for the plain fiducial point sharing only zdel's fiducial."""
+    if not reuse_dir:
+        return False
+    meta_path = os.path.join(reuse_dir, 'amber_run.json')
+    if not os.path.exists(meta_path):
+        return False
+    m = json.load(open(meta_path))
+    return all(abs(m.get(k, float('nan')) - p[k]) < 1e-9
+              for k in ('zmid', 'zdel', 'zasy', 'Mmin', 'mfp'))
+
+
+def run_one(root, p, L, N, ncore, cosmology, amber_x, python_exe,
            reuse_dir=None, timeout=600):
     """Ensure one config exists and is validated. Returns dict of results
     or None if it failed (input generation, AMBER, or the gate)."""
-    tag = tag_for(zmid, zdel)
-    d = reuse_dir if reuse_dir else cfg_dir(root, tag)
+    tag = tag_for(p)
+    d = reuse_dir if _matches_reuse(p, reuse_dir) else cfg_dir(root, tag)
     npz_path = os.path.join(d, 'amber_gate.npz')
 
     if os.path.exists(npz_path) and _npz_is_complete(npz_path):
         print(f"  [{tag}] already validated at {d} -- reusing")
-        return _read_result(d, npz_path, zmid, zdel)
+        return _read_result(d, npz_path, p)
 
     skip_amber = os.path.isdir(os.path.join(d, 'output', 'cmb')) and \
         len(_glob_fields(d)) > 0
@@ -92,8 +146,10 @@ def run_one(root, zmid, zdel, zasy, L, N, ncore, amber_x, python_exe,
         gen = subprocess.run(
             [python_exe, os.path.join(HERE, 'make_amber_input.py'),
              '--out', d, '--L', str(L), '--N', str(N),
-             '--zmid', str(zmid), '--zdel', str(zdel), '--zasy', str(zasy),
-             '--ncore', str(ncore)],
+             '--zmid', str(p['zmid']), '--zdel', str(p['zdel']),
+             '--zasy', str(p['zasy']), '--Mmin', str(p['Mmin']),
+             '--mfp', str(p['mfp']), '--ncore', str(ncore),
+             '--cosmology', cosmology],
             capture_output=True, text=True)
         if gen.returncode != 0:
             print(f"  [{tag}] INPUT GENERATION FAILED:\n{gen.stderr[-2000:]}")
@@ -118,8 +174,8 @@ def run_one(root, zmid, zdel, zasy, L, N, ncore, amber_x, python_exe,
         if r.returncode != 0 or 'AMBER completed' not in log:
             print(f"  [{tag}] AMBER FAILED (exit {r.returncode}, {dt:.0f}s) -- "
                  f"see {d}/output/log.txt")
-            print('    ' + log.strip().splitlines()[-1] if log.strip() else
-                 '    (empty log)')
+            print('    ' + (log.strip().splitlines()[-1] if log.strip() else
+                 '(empty log)'))
             return None
         print(f"  [{tag}] amber.x completed in {dt:.0f}s")
 
@@ -137,12 +193,12 @@ def run_one(root, zmid, zdel, zasy, L, N, ncore, amber_x, python_exe,
             gate.stdout + gate.stderr)
         return None
 
-    return _read_result(d, npz_path, zmid, zdel)
+    return _read_result(d, npz_path, p)
 
 
-def _read_result(d, npz_path, zmid, zdel):
+def _read_result(d, npz_path, p):
     z = np.load(npz_path)
-    return dict(dir=d, zmid=zmid, zdel=zdel,
+    return dict(dir=d, params=p,
                ells=z['ells'], D_cc=z['D_compute_cell'],
                D_win=z['D_amber_window'], window=z['window'],
                hist_z=z['hist_z'], hist_xH_vol=z['hist_xH_vol'])
@@ -153,20 +209,20 @@ def main():
     ap.add_argument('--amber-x', required=True)
     ap.add_argument('--out-root', default='runs/sweep')
     ap.add_argument('--reuse', default=None,
-                    help='existing validated run dir for the shared '
-                         '(zmid_fixed, zdel_fixed) point, e.g. runs/amber_q01')
+                    help='existing validated run dir, reused for any '
+                         'point whose amber_run.json matches it exactly '
+                         '(e.g. amber_q01 for the shared fiducial point)')
     ap.add_argument('--L', type=float, default=256.0)
     ap.add_argument('--N', type=int, default=256)
-    ap.add_argument('--zasy', type=float, default=3.0)
     ap.add_argument('--ncore', type=int, default=16)
-    ap.add_argument('--zmid-fixed', type=float, default=8.0)
-    ap.add_argument('--zdel-fixed', type=float, default=4.0)
-    ap.add_argument('--zdel-values', type=float, nargs='+',
-                    default=[2.0, 4.0, 6.0, 8.0],
-                    help='scenario A: Delta_z values at zmid-fixed')
-    ap.add_argument('--zmid-values', type=float, nargs='+',
-                    default=[6.0, 7.0, 8.0, 9.0, 10.0],
-                    help='scenario B: z_mid values at zdel-fixed')
+    ap.add_argument('--cosmology', default='planck18',
+                    help="passed through to make_amber_input.py -- must "
+                         "match --reuse's own cosmology if given")
+    ap.add_argument('--scenarios-json', default=None,
+                    help='path to a JSON {name: {axis, axis_label, '
+                         'points:[{zmid,zdel,zasy,Mmin,mfp,label},...]}} '
+                         'dict, overriding the built-in Chen et al. 2023 '
+                         'Figure 10 scenarios')
     ap.add_argument('--timeout', type=int, default=600,
                     help='seconds per amber.x call (no-map runs are '
                          'fast; generous default, see docs)')
@@ -178,58 +234,50 @@ def main():
     if not os.path.isfile(amber_x):
         raise SystemExit(f"amber.x not found at {amber_x}")
 
-    def reuse_if_matches(zmid, zdel):
-        return (a.reuse if (a.reuse and abs(zmid - a.zmid_fixed) < 1e-9
-                            and abs(zdel - a.zdel_fixed) < 1e-9) else None)
+    scenarios = (json.load(open(a.scenarios_json)) if a.scenarios_json
+                else CHEN2023_FIG10_SCENARIOS)
 
-    results = {'A': [], 'B': []}
-    print(f"=== Scenario A: z_mid={a.zmid_fixed} fixed, "
-         f"Delta_z in {a.zdel_values} ===")
-    for zdel in a.zdel_values:
-        res = run_one(a.out_root, a.zmid_fixed, zdel, a.zasy, a.L, a.N,
-                      a.ncore, amber_x, a.python,
-                      reuse_dir=reuse_if_matches(a.zmid_fixed, zdel),
-                      timeout=a.timeout)
-        if res:
-            results['A'].append(res)
-
-    print(f"\n=== Scenario B: Delta_z={a.zdel_fixed} fixed, "
-         f"z_mid in {a.zmid_values} ===")
-    for zmid in a.zmid_values:
-        res = run_one(a.out_root, zmid, a.zdel_fixed, a.zasy, a.L, a.N,
-                      a.ncore, amber_x, a.python,
-                      reuse_dir=reuse_if_matches(zmid, a.zdel_fixed),
-                      timeout=a.timeout)
-        if res:
-            results['B'].append(res)
+    results = {}
+    for name, scen in scenarios.items():
+        print(f"\n=== Scenario '{name}' ({scen['axis_label']}) ===")
+        results[name] = []
+        for p in scen['points']:
+            res = run_one(a.out_root, p, a.L, a.N, a.ncore, a.cosmology,
+                          amber_x, a.python, reuse_dir=a.reuse,
+                          timeout=a.timeout)
+            if res:
+                results[name].append(res)
 
     out = os.path.join(a.out_root, 'sweep_results.npz')
     payload = {}
-    for scen in ('A', 'B'):
-        payload[f'{scen}_zmid'] = np.array([r['zmid'] for r in results[scen]])
-        payload[f'{scen}_zdel'] = np.array([r['zdel'] for r in results[scen]])
-        # ells grids match across a scenario only if L,N are fixed (they
-        # are, by construction) and the patchy window is similar; still
-        # verify before stacking, since window WILL differ across z_mid
-        for i, r in enumerate(results[scen]):
-            payload[f'{scen}_{i}_ells'] = r['ells']
-            payload[f'{scen}_{i}_Dcc'] = r['D_cc']
-            payload[f'{scen}_{i}_Dwin'] = r['D_win']
-            payload[f'{scen}_{i}_window'] = r['window']
-            payload[f'{scen}_{i}_hist_z'] = r['hist_z']
-            payload[f'{scen}_{i}_hist_xH'] = r['hist_xH_vol']
-        payload[f'{scen}_n'] = len(results[scen])
+    for name, scen in scenarios.items():
+        pts = results[name]
+        payload[f'{name}_axis'] = scen['axis']
+        payload[f'{name}_n'] = len(pts)
+        for i, r in enumerate(pts):
+            payload[f'{name}_{i}_ells'] = r['ells']
+            payload[f'{name}_{i}_Dcc'] = r['D_cc']
+            payload[f'{name}_{i}_Dwin'] = r['D_win']
+            payload[f'{name}_{i}_window'] = r['window']
+            payload[f'{name}_{i}_hist_z'] = r['hist_z']
+            payload[f'{name}_{i}_hist_xH'] = r['hist_xH_vol']
+            payload[f'{name}_{i}_axisval'] = r['params'][scen['axis']]
+            payload[f'{name}_{i}_label'] = r['params']['label']
     np.savez(out, **payload)
-    meta = dict(L=a.L, N=a.N, zasy=a.zasy, zmid_fixed=a.zmid_fixed,
-               zdel_fixed=a.zdel_fixed)
+
+    meta = dict(L=a.L, N=a.N, cosmology=a.cosmology,
+               axis_labels={n: s['axis_label'] for n, s in scenarios.items()})
     json.dump(meta, open(os.path.join(a.out_root, 'sweep_meta.json'), 'w'))
-    print(f"\nwrote {out}  (A: {len(results['A'])}/{len(a.zdel_values)} "
-         f"points, B: {len(results['B'])}/{len(a.zmid_values)} points)")
-    failed_A = len(a.zdel_values) - len(results['A'])
-    failed_B = len(a.zmid_values) - len(results['B'])
-    if failed_A or failed_B:
-        print(f"WARNING: {failed_A + failed_B} point(s) failed and were "
-             f"excluded -- see per-config output/log.txt or gate_output.txt")
+
+    print(f"\nwrote {out}")
+    total_fail = 0
+    for name, scen in scenarios.items():
+        n_ok, n_req = len(results[name]), len(scen['points'])
+        print(f"  {name}: {n_ok}/{n_req} points")
+        total_fail += n_req - n_ok
+    if total_fail:
+        print(f"WARNING: {total_fail} point(s) failed and were excluded "
+             f"-- see per-config output/log.txt or gate_output.txt")
 
 
 if __name__ == '__main__':

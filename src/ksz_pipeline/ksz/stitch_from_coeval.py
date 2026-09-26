@@ -41,12 +41,27 @@ FIRST cross-check run. The native lightcone's OWN rotation path
 clamped instead of wrapped) that didn't explain its D_ell excess --
 starting this independent check unrotated avoids conflating a second,
 separate rotation implementation with whatever the real problem is.
+
+UPDATE: a single, fixed angle_deg (whether 0 or nonzero) does not break
+a snapshot's own periodic repeat along the LOS -- verified directly: the
+same (ir,jr) rotation applied at a y_cell that later wraps back to the
+same value pulls a bit-identical slab both times, since nothing about
+the sampling differs between the two visits. For that, use the new
+wrap_cycle_seed parameter (stitch_field / stitch_lightcone_from_coeval)
+instead, which varies the rotation per periodic wrap-cycle (one BOX_LEN
+of comoving distance) rather than using one fixed angle throughout, and
+uses bilinear rather than nearest-neighbor sampling to avoid the 10-31%
+pixel aliasing nearest-neighbor rotation has at generic angles. This is
+additive: angle_deg alone (wrap_cycle_seed=None, the default) is
+untouched and remains exactly what every prior result in this
+investigation used.
 """
 
 import numpy as np
 from astropy.cosmology import Planck18 as cosmo
 import astropy.units as u
 from scipy.interpolate import interp1d
+from scipy.ndimage import map_coordinates
 
 # run_coeval_fields is imported lazily, inside stitch_lightcone_from_coeval,
 # not here -- it pulls in py21cmfast, and the geometry/interpolation
@@ -134,8 +149,100 @@ def get_slab(box, y_cell, ir, jr):
     return box[ir, jr, y_cell]
 
 
+# ---------------------------------------------------------------------
+# Per-wrap-cycle rotation (opt-in via stitch_field's wrap_cycle_seed).
+#
+# A SINGLE, FIXED rotation (angle_deg above, applied identically at every
+# LOS position) does NOT break the periodic repeat of any one snapshot's
+# own box: verified directly -- box[ir,jr,y_cell] is bit-identical the
+# next time y_cell wraps back to the same value, for ANY fixed (ir,jr),
+# since nothing about the sampling changed between the two visits. The
+# rotation angle must instead depend on WHICH periodic repeat ("wrap
+# cycle") of the box a given LOS position falls into -- one full BOX_LEN
+# of comoving distance per cycle, since that's the box's own literal
+# repeat scale, not a free parameter to tune.
+#
+# The angle must be the SAME for every snapshot queried at a given LOS
+# position (not per-snapshot): stitch_field already queries every
+# snapshot at the same y_cell for a given target z, so keying the angle
+# on the LOS position's cycle index (not on which snapshot) automatically
+# shares one rotation across all snapshots blended there -- preserving
+# their real physical time-correlation while still varying between
+# different visits to the same underlying box.
+#
+# Nearest-neighbor rotation (rotated_indices/get_slab above) was measured
+# to alias 10-31% of pixels for generic (non-multiple-of-90) angles --
+# collisions where multiple output pixels round to the same source pixel
+# while others are never sampled at all -- symmetric in angle-mod-90,
+# worst at 45 deg past any multiple of 90, zero exactly at multiples.
+# Since per-wrap-cycle rotation needs many distinct, generic angles (not
+# just 0/90/180/270), this path uses BILINEAR interpolation instead
+# (scipy.ndimage.map_coordinates, order=1, mode='wrap' for periodic
+# boundaries) -- the standard fix for this class of artifact, and it
+# removes the angle-dependent aliasing entirely rather than picking
+# angles that merely minimize it.
+# ---------------------------------------------------------------------
+
+def wrap_cycle_index(z, z0, cell_size, ngrid):
+    """
+    Which periodic wrap-cycle (integer, 0-indexed) this redshift's LOS
+    position falls into, relative to z0. One cycle = one full BOX_LEN
+    (= cell_size * ngrid) of comoving distance -- the box's own literal
+    periodic repeat scale, not a tunable chunk size.
+    """
+    d = comoving_distance_mpc(z) - comoving_distance_mpc(z0)
+    box_len = cell_size * ngrid
+    return int(d // box_len)
+
+
+def cycle_angle(cycle_idx, seed):
+    """
+    Deterministic rotation angle (degrees) for a given wrap-cycle index.
+    np.random.default_rng accepts a sequence of ints as a seed, so
+    (seed, cycle_idx) fully determines the angle with no shared mutable
+    state and no caching needed: calling this twice with the same
+    (seed, cycle_idx) always returns the same angle, which is exactly
+    what's needed for different snapshots (and different fields --
+    density/xH/velocity) queried at the same LOS position to agree.
+    """
+    rng = np.random.default_rng((int(seed), int(cycle_idx)))
+    return float(rng.uniform(0.0, 360.0))
+
+
+def rotated_coords(ngrid, angle_deg):
+    """
+    Continuous (non-rounded) rotated transverse coordinate grids, for
+    bilinear sampling via get_slab_bilinear -- the fractional-coordinate
+    analogue of rotated_indices' integer (ir, jr), deliberately NOT
+    rounded or wrapped here (map_coordinates' mode='wrap' handles the
+    periodic wrapping during interpolation itself).
+
+    Returns
+    -------
+    ic, jc : ndarray (ngrid, ngrid) float   continuous rotated coordinates
+    """
+    a = np.deg2rad(angle_deg)
+    i, j = np.meshgrid(np.arange(ngrid), np.arange(ngrid), indexing='ij')
+    ic = np.cos(a) * i - np.sin(a) * j
+    jc = np.sin(a) * i + np.cos(a) * j
+    return ic, jc
+
+
+def get_slab_bilinear(box, y_cell, ic, jc):
+    """
+    Bilinearly-interpolated, periodically-wrapped rotated (ngrid, ngrid)
+    transverse slab of `box` at LOS index y_cell, at the continuous
+    rotated coordinates (ic, jc) from rotated_coords(). order=1 is
+    bilinear; mode='wrap' makes the interpolation itself periodic, so a
+    coordinate just past the last pixel blends smoothly with the first
+    (the continuous analogue of get_slab's integer '% ngrid' wrap).
+    """
+    return map_coordinates(box[:, :, y_cell], [ic, jc], order=1,
+                            mode='wrap')
+
+
 def stitch_field(snapshot_boxes, snap_z, z_arr, z0, cell_size, ngrid,
-                  angle_deg=0.0):
+                  angle_deg=0.0, wrap_cycle_seed=None):
     """
     Interpolate one field, already loaded per snapshot redshift, onto a
     continuous LOS redshift grid z_arr.
@@ -148,6 +255,11 @@ def stitch_field(snapshot_boxes, snap_z, z_arr, z0, cell_size, ngrid,
     (reducing periodic-replication artifacts when angle_deg != 0) while
     still capturing the physical time-evolution between snapshots.
 
+    CORRECTION: the parenthetical above does not hold as stated -- a
+    single fixed angle_deg does NOT reduce periodic-replication
+    artifacts; verified directly (see module docstring's UPDATE note).
+    Use wrap_cycle_seed for that instead.
+
     Parameters
     ----------
     snapshot_boxes : dict {z: ndarray(ngrid,ngrid,ngrid)}
@@ -158,18 +270,50 @@ def stitch_field(snapshot_boxes, snap_z, z_arr, z0, cell_size, ngrid,
                      red_axis starts)
     cell_size      : float, comoving Mpc per cell
     ngrid          : int
-    angle_deg      : float, transverse rotation (default 0, see module note)
+    angle_deg      : float, transverse rotation (default 0, see module note).
+                     Ignored entirely if wrap_cycle_seed is not None.
+    wrap_cycle_seed : int or None, default None.
+                     None (default): EXACT original behavior below --
+                     single angle_deg, nearest-neighbor rotation, applied
+                     identically at every LOS position. This is the path
+                     every result in this investigation has used so far
+                     (always with angle_deg=0.0); untouched by this
+                     parameter's addition.
+                     int: use a DIFFERENT, deterministic rotation angle
+                     per periodic wrap-cycle instead (see wrap_cycle_index/
+                     cycle_angle above), with bilinear (not nearest-
+                     neighbor) sampling to avoid the aliasing nearest-
+                     neighbor rotation has at generic angles.
 
     Returns
     -------
     lc : ndarray (ngrid, ngrid, len(z_arr)), float32
     """
-    ir, jr = rotated_indices(ngrid, angle_deg)
-    lc = np.empty((ngrid, ngrid, len(z_arr)), dtype=np.float32)
+    if wrap_cycle_seed is None:
+        # Original code path, byte-for-byte unchanged.
+        ir, jr = rotated_indices(ngrid, angle_deg)
+        lc = np.empty((ngrid, ngrid, len(z_arr)), dtype=np.float32)
 
+        for n, z in enumerate(z_arr):
+            y_cell = comoving_pixel(z, z0, cell_size, ngrid)
+            slabs = np.stack([get_slab(snapshot_boxes[sz], y_cell, ir, jr)
+                               for sz in snap_z], axis=-1)
+            interp = interp1d(snap_z, slabs, axis=-1, bounds_error=False,
+                               fill_value="extrapolate")
+            lc[:, :, n] = interp(z)
+        return lc
+
+    # Per-wrap-cycle rotation, bilinear sampling (see helpers above).
+    lc = np.empty((ngrid, ngrid, len(z_arr)), dtype=np.float32)
+    coords_by_cycle = {}
     for n, z in enumerate(z_arr):
         y_cell = comoving_pixel(z, z0, cell_size, ngrid)
-        slabs = np.stack([get_slab(snapshot_boxes[sz], y_cell, ir, jr)
+        cycle = wrap_cycle_index(z, z0, cell_size, ngrid)
+        if cycle not in coords_by_cycle:
+            angle = cycle_angle(cycle, wrap_cycle_seed)
+            coords_by_cycle[cycle] = rotated_coords(ngrid, angle)
+        ic, jc = coords_by_cycle[cycle]
+        slabs = np.stack([get_slab_bilinear(snapshot_boxes[sz], y_cell, ic, jc)
                            for sz in snap_z], axis=-1)
         interp = interp1d(snap_z, slabs, axis=-1, bounds_error=False,
                            fill_value="extrapolate")
@@ -179,7 +323,7 @@ def stitch_field(snapshot_boxes, snap_z, z_arr, z0, cell_size, ngrid,
 
 def stitch_lightcone_from_coeval(z_snapshots, z_arr, HII_DIM, BOX_LEN,
                                   cache_dir, angle_deg=0.0, N_THREADS=None,
-                                  random_seed=None):
+                                  random_seed=None, wrap_cycle_seed=None):
     """
     Build a full (density, xH, velocity_z) lightcone by running/loading
     coeval boxes at z_snapshots (via the shared, validated
@@ -197,12 +341,19 @@ def stitch_lightcone_from_coeval(z_snapshots, z_arr, HII_DIM, BOX_LEN,
     BOX_LEN     : float, comoving Mpc
     cache_dir   : str, py21cmfast cache directory (reused across snapshots)
     angle_deg   : float, see module docstring -- default 0 recommended
-                  for the first cross-check
+                  for the first cross-check. Ignored if wrap_cycle_seed
+                  is not None (see stitch_field).
     N_THREADS   : int, optional -- passed through to run_coeval_fields.
                   Defaults to OMP_NUM_THREADS if unset (see
                   coeval/fields.py). Pass explicitly (e.g. from config's
                   21cmfast.N_THREADS, matching script 01's convention)
                   for anything beyond quick interactive testing.
+    wrap_cycle_seed : int or None, default None -- see stitch_field.
+                  Passed identically to all three field calls below so
+                  density/xH/velocity share the SAME rotation at every
+                  LOS position; using different seeds per field would
+                  break their physical correspondence (e.g. velocity
+                  rotated one way, density another, at the same point).
 
     Returns
     -------
@@ -230,11 +381,11 @@ def stitch_lightcone_from_coeval(z_snapshots, z_arr, HII_DIM, BOX_LEN,
         vz_boxes[z]    = vz
 
     density    = stitch_field(delta_boxes, snap_z, z_arr, z0, cell_size,
-                               HII_DIM, angle_deg)
+                               HII_DIM, angle_deg, wrap_cycle_seed)
     xH_box     = stitch_field(xH_boxes,    snap_z, z_arr, z0, cell_size,
-                               HII_DIM, angle_deg)
+                               HII_DIM, angle_deg, wrap_cycle_seed)
     velocity_z = stitch_field(vz_boxes,    snap_z, z_arr, z0, cell_size,
-                               HII_DIM, angle_deg)
+                               HII_DIM, angle_deg, wrap_cycle_seed)
 
     pos_axis = np.array([comoving_distance_mpc(z) for z in z_arr])
 

@@ -118,7 +118,8 @@ from ksz_pipeline.ksz.coherence_decomposition import (compute_ksz_map_per_slice,
 from ksz_pipeline.utils.constants import ne0_cgs, MPC_CM
 
 
-def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source):
+def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source,
+         wrap_cycle_seed=None):
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
     sim_cfg = cfg['21cmfast']
@@ -143,6 +144,8 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     tag_suffix = "" if is_fiducial_config else f"_box{int(BOX_LEN)}"
     if source == 'native':
         tag_suffix += "_native"
+    if wrap_cycle_seed is not None and source == 'coeval':
+        tag_suffix += f"_wrapcycle{wrap_cycle_seed}"
     print(f"Coherence decomposition -- BOX_LEN={BOX_LEN} Mpc, "
           f"HII_DIM={HII_DIM} (dx={dx_this_run:.4f} Mpc), {len(z_snapshots)} z_snapshots, "
           f"source={source}. "
@@ -154,6 +157,10 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
               "validated. The 'direct' reference plotted is ALWAYS closure_test.npz's "
               "fiducial-coeval value regardless of this run's own box_len/hii_dim -- "
               "a rough anchor only, see module docstring.")
+        if wrap_cycle_seed is not None:
+            print(f"WARNING: --wrap-cycle-seed={wrap_cycle_seed} was passed but "
+                  f"stitch_lightcone_native has no such parameter -- IGNORED. This "
+                  f"run uses no rotation at all, same as native's existing default.\n")
 
     # ---- load the matched window + chi_eff from the closure test (script 14) --
     # these are LOS/redshift-only quantities, reused regardless of box size. ----
@@ -195,13 +202,15 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     # same regardless of which loader built it (matching output contract)
     # ================================================================
     if source == 'coeval':
-        print("Building stitched lightcone (fiducial scale)...")
+        wc_note = f" [wrap_cycle_seed={wrap_cycle_seed}]" if wrap_cycle_seed is not None else ""
+        print(f"Building stitched lightcone (fiducial scale){wc_note}...")
         cell_size = BOX_LEN / HII_DIM
         z_arr = build_los_z_grid(z_min, z_max, cell_size)
         stitched = stitch_lightcone_from_coeval(
             z_snapshots=z_snapshots, z_arr=z_arr, HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
             cache_dir=cache_dir, angle_deg=0.0,
-            N_THREADS=sim_cfg['N_THREADS'], random_seed=sim_cfg['random_seed'])
+            N_THREADS=sim_cfg['N_THREADS'], random_seed=sim_cfg['random_seed'],
+            wrap_cycle_seed=wrap_cycle_seed)
     else:  # source == 'native'
         print("Building NATIVE lightcone via py21cmfast's own run_lightcone()...")
         stitched = stitch_lightcone_native(
@@ -343,12 +352,13 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
                    'coeval-direct (script 14, ROUGH ANCHOR ONLY -- see caveat)'
     ax1.plot(ell_direct, Dl_direct, 'k-', lw=2, label=direct_label)
     src_word = "stitched" if source == "coeval" else "native"
+    wc_tag = f", wrap_cycle_seed={wrap_cycle_seed}" if (wrap_cycle_seed is not None and source == 'coeval') else ""
     ax1.plot(ell_dec, Dl_diag, color='tab:blue', lw=2, ls='--',
-             label=f'{src_word} P_diag (grouped, unshifted)')
+             label=f'{src_word} P_diag (grouped, unshifted{wc_tag})')
     ax1.plot(ell_dec, Dl_total, color='tab:red', lw=1.5,
-             label=f'{src_word} P_total (unshifted)')
+             label=f'{src_word} P_total (unshifted{wc_tag})')
     ax1.plot(ell_shift, Dl_total_shift, color='tab:green', lw=1.5, ls=':',
-              label=f'{src_word} P_total (shifted control)')
+              label=f'{src_word} P_total (shifted control{wc_tag})')
     ax1.set_xscale('log'); ax1.set_yscale('log')
     ax1.set_xlabel(r'$\ell$'); ax1.set_ylabel(r'$D_\ell$ [$\mu$K$^2$]')
     ax1.set_title('P_diag vs direct, fiducial resolution' if source == 'coeval'
@@ -367,6 +377,8 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     ax2.set_ylabel('mean pairwise cross-power')
     ax2.set_title('P_off vs radial separation: real vs shifted' if source == 'coeval'
                   else f'P_off vs radial separation: real vs shifted ({source})')
+    if wc_tag:
+        ax2.set_title(ax2.get_title() + wc_tag)
     ax2.legend(fontsize=9)
 
     plt.tight_layout()
@@ -376,6 +388,7 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
 
     np.savez(f"{out_dir}/coherence_decomposition{tag_suffix or '_fiducial'}.npz",
               box_len=BOX_LEN, hii_dim=HII_DIM, source=source,
+              wrap_cycle_seed=wrap_cycle_seed if wrap_cycle_seed is not None else -1,
               ell_direct=ell_direct, Dl_direct=Dl_direct, d3000_direct=d3000_direct,
               ell_dec=ell_dec, Dl_total=Dl_total, Dl_diag=Dl_diag, Dl_off=Dl_off,
               ell_shift=ell_shift, Dl_total_shift=Dl_total_shift,
@@ -400,5 +413,12 @@ if __name__ == "__main__":
     parser.add_argument("--source", choices=["coeval", "native"], default="coeval",
                          help="lightcone data source; default preserves existing "
                               "behaviour exactly")
+    parser.add_argument("--wrap-cycle-seed", type=int, default=None,
+                         help="Use per-wrap-cycle rotation (stitch_from_coeval.py's "
+                              "wrap_cycle_seed) instead of the no-rotation default. "
+                              "--source coeval only -- ignored with a warning for "
+                              "--source native. Default None preserves existing "
+                              "behaviour exactly (byte-identical output).")
     args = parser.parse_args()
-    main(args.config, args.shift_seed, args.box_len, args.hii_dim, args.source)
+    main(args.config, args.shift_seed, args.box_len, args.hii_dim, args.source,
+         args.wrap_cycle_seed)

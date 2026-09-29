@@ -1,0 +1,97 @@
+#!/bin/bash
+# pbs/probe_2gpc_1536.pbs
+#
+# SANITY PROBE, not the real sweep -- and N=2048 is now OFF THE TABLE,
+# not "let's try it": your `pbsnodes -a` shows all 12 swarm nodes at
+# resources_available.mem = 527992568kb (~528 GB / 503.5 GiB), uniform,
+# no big-memory node. AMBER is OpenMP-only (src/Makefile: only
+# -qopenmp, no MPI/domain decomposition), so one run must fit inside
+# ONE node's RAM. From the actual array declarations in
+# mesh.f90/lpt.f90/esf.f90/reion.f90 (80 bytes/cell x N^3, all real(4)/
+# real(8) N^3-shaped arrays, summed):
+#
+#     N=2048  -> ~687 GB   (127% of a node -- CANNOT run, full stop)
+#     N=1792  -> ~460 GB   (85% of a node -- tight, not recommended
+#                           given shared-node contention + unmodeled
+#                           smaller buffers)
+#     N=1536  -> ~290 GB   (54% of a node -- comfortable margin)
+#     N=1024  -> ~86 GB    (16% of a node -- very safe)
+#
+# This probe targets N=1536 at the same L=2000 Mpc/h (2 Gpc/h) you
+# asked for -- same volume, dx=1.30 Mpc/h/cell instead of 0.98 (vs.
+# fiducial's 1.0 Mpc/h/cell, so barely coarser than what's already
+# validated). It checks:
+#   1. MEMORY -- /usr/bin/time -v reports real peak RSS, to confirm (or
+#      correct) the 290 GB estimate before trusting it for the full
+#      16-config sweep.
+#   2. WALLTIME -- runs only 4 shells (z=7-9, not the full 28-shell
+#      z=4.5-18.5) to time the per-shell cost (MESH density/velocity
+#      regen + both power-spectrum FFTs) and extrapolate.
+#
+# swarm is heavily loaded right now (pbsnodes showed most nodes with
+# 32-64/64 cpus already assigned to other users' jobs) -- this may sit
+# in queue for a while before it starts. That's normal; don't resubmit.
+#
+# EDIT before submitting:
+#   - AMBER_X to your built binary
+#   - queue name (-q) if your site requires one
+#   - mem/ncpus below only if you want a different safety margin
+#
+#PBS -N amber_probe_2gpc_1536
+#PBS -l select=1:ncpus=64:mem=350gb
+#PBS -l walltime=04:00:00
+#PBS -j oe
+#PBS -o probe_2gpc_1536.log
+
+set -uo pipefail
+cd "$PBS_O_WORKDIR" || exit 1
+
+source /apps/intel/oneapi/setvars.sh >/dev/null 2>&1
+export LD_LIBRARY_PATH="$HOME/Healpix_3.83/lib:/apps/anaconda3/lib:$LD_LIBRARY_PATH"
+export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
+
+AMBER_X="$HOME/amber/src/amber.x"     # EDIT if built elsewhere
+ROOT="runs/probe_2gpc_1536"
+NCORE=64                              # EDIT: match #PBS ncpus above
+
+echo "=== node info ==="
+hostname
+free -h || true
+nproc || true
+echo
+
+mkdir -p "$ROOT"
+python scripts/make_amber_input.py --out "$ROOT" \
+    --L 2000 --N 1536 \
+    --zmid 8.0 --zdel 4.0 --zasy 3.0 --Mmin 1e8 --mfp 3.0 \
+    --czmin 7.0 --czmax 9.0 --czdel 0.5 --cspacing lin \
+    --ncore "$NCORE" --cosmology chen2022 --mapmake no
+gen_rc=$?
+if [ $gen_rc -ne 0 ]; then
+    echo "make_amber_input.py FAILED (exit $gen_rc) -- not an AMBER issue, fix input first"
+    exit 1
+fi
+
+for sub in cosmo reion grf lpt esf mesh cmb; do
+    mkdir -p "$ROOT/output/$sub"
+done
+
+cd "$ROOT" || exit 1
+echo "=== starting amber.x  $(date) ==="
+if command -v /usr/bin/time >/dev/null 2>&1; then
+    /usr/bin/time -v -o output/time.txt "$AMBER_X" < input/input.txt > output/log.txt 2>&1
+else
+    echo "(GNU time not found -- no peak-RSS number, only the log's own timing lines)"
+    "$AMBER_X" < input/input.txt > output/log.txt 2>&1
+fi
+echo "amber.x exit code: $?"
+echo "=== finished  $(date) ==="
+
+echo
+echo "=== last 20 lines of output/log.txt ==="
+tail -20 output/log.txt
+echo
+if [ -f output/time.txt ]; then
+    echo "=== peak memory (Maximum resident set size) ==="
+    grep -i "maximum resident" output/time.txt
+fi

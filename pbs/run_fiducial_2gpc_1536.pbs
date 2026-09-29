@@ -1,0 +1,96 @@
+#!/bin/bash
+# pbs/run_fiducial_2gpc_1536.pbs
+#
+# FULL reionization history (z=4.5-18.5, 28 shells, AMBER's own defaults --
+# czmin/czmax/czdel deliberately NOT overridden so this matches exactly
+# what scripts/40_run_amber_sweep.py would generate for this point, making
+# it a valid --reuse candidate later) for the FIDUCIAL point only
+# (zmid=8, Delta_z=4, A_z=3, Mmin=1e8, mfp=3.0 -- same as amber_q01 and
+# the Chen2023-sweep fiducial), at L=2000 Mpc/h (2 Gpc/h), N=1536
+# (dx=1.30 Mpc/h/cell -- see pbs/probe_2gpc_1536.pbs for why 1536, not
+# 2048: no swarm node has enough RAM for 2048^3).
+#
+# Directory is named with the SAME tag_for() convention
+# scripts/40_run_amber_sweep.py uses (zmid8_dz4_az3_mh8_mfp3), so if/when
+# the other 15 Chen2023 points get run at this resolution, this one can
+# be picked up for free via --reuse instead of rerun.
+#
+# NO TIMING CALIBRATION EXISTS YET for a full 28-shell run at N=1536 --
+# only the probe's 4 shells (if you ran it). 48h walltime here is a
+# guess with real margin (leaves 24h inside a 72h/3-day budget), not a
+# measured number. Per-shell progress is visible live in
+# output/log.txt (each shell prints its own timing lines) -- if you can
+# check in after a few hours, tell me the first 2-3 shells' timings and
+# I'll project whether 48h is enough or whether to intervene early
+# (AMBER has NO checkpoint/resume, but power_z=*.txt is written
+# incrementally per shell -- see cmbreion.f90 -- so a killed job still
+# leaves usable partial results for whatever shells did finish).
+#
+# EDIT before submitting:
+#   - AMBER_X to your built binary
+#   - queue name (-q) if your site requires one
+#
+#PBS -N amber_fiducial_2gpc_1536
+#PBS -l select=1:ncpus=64:mem=350gb
+#PBS -l walltime=48:00:00
+#PBS -j oe
+#PBS -o fiducial_2gpc_1536.log
+
+set -uo pipefail
+cd "$PBS_O_WORKDIR" || exit 1
+
+source /apps/intel/oneapi/setvars.sh >/dev/null 2>&1
+export LD_LIBRARY_PATH="$HOME/Healpix_3.83/lib:/apps/anaconda3/lib:$LD_LIBRARY_PATH"
+export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
+
+AMBER_X="$HOME/amber/src/amber.x"     # EDIT if built elsewhere
+ROOT="runs/sweep_2gpc_1536/zmid8_dz4_az3_mh8_mfp3"
+NCORE=64
+
+echo "=== node info ==="
+hostname
+free -h || true
+nproc || true
+echo
+
+mkdir -p "$ROOT"
+python scripts/make_amber_input.py --out "$ROOT" \
+    --L 2000 --N 1536 \
+    --zmid 8.0 --zdel 4.0 --zasy 3.0 --Mmin 1e8 --mfp 3.0 \
+    --ncore "$NCORE" --cosmology chen2022 --mapmake no
+gen_rc=$?
+if [ $gen_rc -ne 0 ]; then
+    echo "make_amber_input.py FAILED (exit $gen_rc) -- not an AMBER issue, fix input first"
+    exit 1
+fi
+
+for sub in cosmo reion grf lpt esf mesh cmb; do
+    mkdir -p "$ROOT/output/$sub"
+done
+
+cd "$ROOT" || exit 1
+echo "=== starting amber.x  $(date) ==="
+if command -v /usr/bin/time >/dev/null 2>&1; then
+    /usr/bin/time -v -o output/time.txt "$AMBER_X" < input/input.txt > output/log.txt 2>&1
+else
+    "$AMBER_X" < input/input.txt > output/log.txt 2>&1
+fi
+rc=$?
+echo "amber.x exit code: $rc"
+echo "=== finished  $(date) ==="
+
+echo
+echo "=== last 30 lines of output/log.txt ==="
+tail -30 output/log.txt
+echo
+if [ -f output/time.txt ]; then
+    echo "=== peak memory (Maximum resident set size) ==="
+    grep -i "maximum resident" output/time.txt
+fi
+
+if [ $rc -eq 0 ] && grep -q "AMBER completed" output/log.txt; then
+    echo
+    echo "=== amber.x completed -- running validation gate ==="
+    cd "$PBS_O_WORKDIR"
+    python scripts/30_amber_validation_gate.py --run "$ROOT"
+fi

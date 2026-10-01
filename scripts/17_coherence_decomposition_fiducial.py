@@ -134,6 +134,35 @@ Usage
 -----
     python scripts/17_coherence_decomposition_fiducial.py --config configs/fiducial.yaml
     python scripts/17_coherence_decomposition_fiducial.py --config configs/fiducial.yaml --source native
+
+ADDED (1Oct2026, same day as astro_params): --random-seed and --skip-direct,
+for building an ENSEMBLE of independent realizations (varying cosmic initial
+conditions) rather than trusting a single draw -- motivated directly by
+Nikolic et al. (2023)'s own Appendix A, which shows a 500 Mpc box's D_3000
+has ~15% realization-to-realization scatter (f=1.27+/-0.19 calibration
+factor, N=20 seeds) purely from missing large-scale power/cosmic variance at
+that box size. A single run at one fixed seed can't be read against their
+curve with any confidence -- an unlucky draw looks like a discrepancy that
+isn't one, a lucky draw looks like agreement that isn't meaningful either.
+
+--random-seed overrides ONLY the STITCHED lightcone's cosmic seed (passed to
+stitch_lightcone_from_coeval / stitch_lightcone_native), NOT the direct
+reference's seed, which always uses the config's own random_seed regardless
+-- see --skip-direct below for why.
+
+--skip-direct skips the coeval-direct reference computation entirely. The
+direct reference depends only on BOX_LEN/HII_DIM/astro_params -- NOT on
+wrap_cycle_seed or this run's own --random-seed override -- so one ensemble
+of N realizations needs exactly ONE direct-reference computation shared
+across all N, not N redundant ones. Also sidesteps needing coeval_sweep.py's
+astro_params passthrough verified before an ensemble's STITCHED runs can
+start -- run once without --skip-direct (after that passthrough exists) to
+get the shared reference, then with it for the rest of the batch. With
+--skip-direct, d3000_direct is saved as NaN, the direct curve is omitted
+from the plot, and the |P_diag-direct|/direct commentary is skipped (it
+would otherwise silently read as "reasonably matches", which is wrong --
+NaN > 0.3 is False in Python, not an error, so this is guarded explicitly
+rather than left to fail silently).
     python scripts/17_coherence_decomposition_fiducial.py --config configs/nikolic_mesinger.yaml
 """
 import argparse
@@ -159,7 +188,7 @@ from ksz_pipeline.utils.constants import ne0_cgs, MPC_CM
 
 
 def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source,
-         wrap_cycle_seed=None):
+         wrap_cycle_seed=None, random_seed_override=None, skip_direct=False):
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
     sim_cfg = cfg['21cmfast']
@@ -187,6 +216,12 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     astro_params = sim_cfg.get('astro_params')
     flag_options = sim_cfg.get('flag_options')
     astro_overridden = astro_params is not None or flag_options is not None
+    # Only the STITCHED lightcone's cosmic seed is overridable -- the direct
+    # reference always uses the config's own random_seed (see --skip-direct
+    # in the module docstring for why: it's a shared, per-(BOX_LEN,HII_DIM,
+    # astro_params) anchor, not something that needs to vary per ensemble draw).
+    stitched_random_seed = (random_seed_override if random_seed_override is not None
+                             else sim_cfg['random_seed'])
 
     tag_suffix = "" if is_fiducial_config else f"_box{int(BOX_LEN)}"
     if source == 'native':
@@ -212,6 +247,16 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
                   "params are IGNORED for the stitched lightcone itself on the native path. "
                   "Only the (already-recomputed) direct reference would reflect them. Use "
                   "--source coeval for the Nikolic/Mesinger/Gorce replication.\n")
+    if random_seed_override is not None:
+        print(f"--random-seed={random_seed_override}: overriding the STITCHED lightcone's "
+              f"cosmic seed (config default was {sim_cfg['random_seed']}). The direct "
+              f"reference, if computed this run, still uses the config's own "
+              f"random_seed={sim_cfg['random_seed']} regardless -- see module docstring.")
+    if skip_direct:
+        print(f"--skip-direct: skipping the coeval-direct reference entirely this run -- "
+              f"ensemble/batch mode. Run once without this flag to get the reference shared "
+              f"across the whole batch (depends only on BOX_LEN/HII_DIM/astro_params, not on "
+              f"wrap_cycle_seed or --random-seed).")
     if source == 'native':
         print("CAVEAT: velocity amplitude not independently validated for the native "
               "path -- see native_lightcone.py's docstring. Fine for the Delta-chi "
@@ -234,7 +279,9 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     chi_eff = float(closure['chi_eff'])
     z_lo, z_hi = float(closure['z_lo']), float(closure['z_hi'])
 
-    if (is_fiducial_config and not astro_overridden) or source == 'native':
+    if skip_direct:
+        ell_direct, Dl_direct = np.array([]), np.array([])
+    elif (is_fiducial_config and not astro_overridden) or source == 'native':
         # Reuse script 14's own trusted direct curve directly. For native at a
         # box-size override this is ALSO the fallback (see module docstring --
         # no native equivalent of coeval_sweep.run_one_config exists or is
@@ -283,9 +330,14 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
             raise
         ell_direct, Dl_direct = direct['ells_direct'], direct['Dl_direct']
 
-    d3000_direct = float(np.interp(3000, ell_direct, Dl_direct))
-    print(f"Matched window z=[{z_lo:.2f},{z_hi:.2f}], chi_eff={chi_eff:.1f} Mpc "
-          f"-- direct D_3000={d3000_direct:.4g} uK^2\n")
+    if skip_direct:
+        d3000_direct = float('nan')
+        print(f"Matched window z=[{z_lo:.2f},{z_hi:.2f}], chi_eff={chi_eff:.1f} Mpc "
+              f"-- direct reference skipped (--skip-direct)\n")
+    else:
+        d3000_direct = float(np.interp(3000, ell_direct, Dl_direct))
+        print(f"Matched window z=[{z_lo:.2f},{z_hi:.2f}], chi_eff={chi_eff:.1f} Mpc "
+              f"-- direct D_3000={d3000_direct:.4g} uK^2\n")
 
     # ================================================================
     # stitched fields -- ONE call differs by source, everything else the
@@ -299,7 +351,7 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
         stitched = stitch_lightcone_from_coeval(
             z_snapshots=z_snapshots, z_arr=z_arr, HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
             cache_dir=cache_dir, angle_deg=0.0,
-            N_THREADS=sim_cfg['N_THREADS'], random_seed=sim_cfg['random_seed'],
+            N_THREADS=sim_cfg['N_THREADS'], random_seed=stitched_random_seed,
             wrap_cycle_seed=wrap_cycle_seed,
             astro_params=astro_params, flag_options=flag_options)
     else:  # source == 'native'
@@ -307,7 +359,7 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
         stitched = stitch_lightcone_native(
             z_min=z_min, z_max=z_max, HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
             cache_dir=cache_dir, angle_deg=0.0,
-            N_THREADS=sim_cfg['N_THREADS'], random_seed=sim_cfg['random_seed'])
+            N_THREADS=sim_cfg['N_THREADS'], random_seed=stitched_random_seed)
 
     density_1plus = 1.0 + stitched['density']
     x_HII_field   = 1.0 - stitched['xH_box']
@@ -384,24 +436,27 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     print(f"{'stitched P_diag (grouped)':26s} {d3000_diag:>15.4g}")
     print(f"{'stitched P_off':26s} {d3000_off:>15.4g}")
 
-    frac_diff = abs(d3000_diag - d3000_direct) / d3000_direct
-    print(f"\n|P_diag - direct| / direct = {frac_diff:.1%}")
-    if source == 'native':
-        print(">>> --source native: this comparison uses closure_test.npz's "
-              "coeval-derived direct value as a rough anchor only (see module "
-              "docstring) -- a large fraction here is EXPECTED given the "
-              "unvalidated velocity amplitude, not necessarily a problem. "
-              "Proceed to the periodicity control and Delta-chi test below, "
-              "which do not depend on this absolute comparison.")
-    elif frac_diff > 0.3:
-        print(">>> Still a substantial mismatch even with correct snapshot-level "
-              "grouping. Per the theory note, P_diag was never GUARANTEED to equal "
-              "direct exactly -- but a mismatch this large still likely means an "
-              "unreconciled convention issue, not (only) the q_parallel-cancellation "
-              "physics. Investigate before treating P_off below as informative.")
+    if skip_direct:
+        print(f"\n(direct reference skipped -- no |P_diag - direct|/direct comparison this run)")
     else:
-        print(">>> P_diag now reasonably matches coeval-direct at proper granularity. "
-              "Proceed to the periodicity control and Delta-chi test below.")
+        frac_diff = abs(d3000_diag - d3000_direct) / d3000_direct
+        print(f"\n|P_diag - direct| / direct = {frac_diff:.1%}")
+        if source == 'native':
+            print(">>> --source native: this comparison uses closure_test.npz's "
+                  "coeval-derived direct value as a rough anchor only (see module "
+                  "docstring) -- a large fraction here is EXPECTED given the "
+                  "unvalidated velocity amplitude, not necessarily a problem. "
+                  "Proceed to the periodicity control and Delta-chi test below, "
+                  "which do not depend on this absolute comparison.")
+        elif frac_diff > 0.3:
+            print(">>> Still a substantial mismatch even with correct snapshot-level "
+                  "grouping. Per the theory note, P_diag was never GUARANTEED to equal "
+                  "direct exactly -- but a mismatch this large still likely means an "
+                  "unreconciled convention issue, not (only) the q_parallel-cancellation "
+                  "physics. Investigate before treating P_off below as informative.")
+        else:
+            print(">>> P_diag now reasonably matches coeval-direct at proper granularity. "
+                  "Proceed to the periodicity control and Delta-chi test below.")
 
     # ================================================================
     # PERIODICITY CONTROL -- random shift, preserves per-slice power,
@@ -443,7 +498,8 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
                    'coeval-direct (script 14, ROUGH ANCHOR ONLY -- see caveat)'
     if astro_overridden:
         direct_label = 'coeval-direct (fresh, Nikolic astro params)'
-    ax1.plot(ell_direct, Dl_direct, 'k-', lw=2, label=direct_label)
+    if not skip_direct:
+        ax1.plot(ell_direct, Dl_direct, 'k-', lw=2, label=direct_label)
     src_word = "stitched" if source == "coeval" else "native"
     wc_tag = f", wrap_cycle_seed={wrap_cycle_seed}" if (wrap_cycle_seed is not None and source == 'coeval') else ""
     ax1.plot(ell_dec, Dl_diag, color='tab:blue', lw=2, ls='--',
@@ -518,6 +574,18 @@ if __name__ == "__main__":
                               "--source coeval only -- ignored with a warning for "
                               "--source native. Default None preserves existing "
                               "behaviour exactly (byte-identical output).")
+    parser.add_argument("--random-seed", type=int, default=None,
+                         help="Override the config's 21cmfast.random_seed for the "
+                              "STITCHED lightcone only (an ensemble over cosmic initial "
+                              "conditions -- see module docstring). The direct reference, "
+                              "when computed, always uses the config's own random_seed "
+                              "regardless. Default None preserves existing behaviour "
+                              "exactly.")
+    parser.add_argument("--skip-direct", action="store_true",
+                         help="Skip the coeval-direct reference entirely (see module "
+                              "docstring) -- for ensemble runs where one shared reference "
+                              "(from a single run without this flag) covers the whole "
+                              "batch. Default False preserves existing behaviour exactly.")
     args = parser.parse_args()
     main(args.config, args.shift_seed, args.box_len, args.hii_dim, args.source,
-         args.wrap_cycle_seed)
+         args.wrap_cycle_seed, args.random_seed, args.skip_direct)

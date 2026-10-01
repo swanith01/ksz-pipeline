@@ -187,6 +187,41 @@ from ksz_pipeline.ksz.coherence_decomposition import (compute_ksz_map_per_slice,
 from ksz_pipeline.utils.constants import ne0_cgs, MPC_CM
 
 
+
+def _plot_nikolic_band(ax):
+    """
+    Overlay the digitized Nikolic/Mesinger/Gorce (2023) Figure 1 kSZ band
+    (data/external/nikolic_ksz_{lower,power,upper}.csv) on an ell-vs-D_ell
+    axis -- added at the user's request once the Nikolic replication
+    ensemble was running (1 Oct 2026). ILLUSTRATIVE ONLY: their curve is
+    from a 1.5 Gpc/1050^3 box, ours from 500 Mpc/256^3 -- very different
+    box size/resolution/sample variance, NOT a like-for-like overlay,
+    labeled as such in the legend. Never raises -- missing CSVs just skip
+    the overlay with a printed note, so this can't break a run that
+    otherwise has nothing to do with these files.
+    """
+    nikolic_dir = 'data/external'
+    try:
+        lo  = np.loadtxt(f'{nikolic_dir}/nikolic_ksz_lower.csv', delimiter=',', skiprows=1)
+        hi  = np.loadtxt(f'{nikolic_dir}/nikolic_ksz_upper.csv', delimiter=',', skiprows=1)
+        mid = np.loadtxt(f'{nikolic_dir}/nikolic_ksz_power.csv', delimiter=',', skiprows=1)
+    except OSError as e:
+        print(f"NOTE: could not load digitized Nikolic kSZ band for overplotting "
+              f"({e}) -- expected data/external/nikolic_ksz_{{lower,power,upper}}.csv. "
+              f"Skipping overlay.")
+        return
+    ell_lo, Dl_lo   = lo[:, 0], lo[:, 1]
+    ell_hi, Dl_hi   = hi[:, 0], hi[:, 1]
+    ell_mid, Dl_mid = mid[:, 0], mid[:, 1]
+    ell_band = np.linspace(max(ell_lo.min(), ell_hi.min()), min(ell_lo.max(), ell_hi.max()), 200)
+    Dl_lo_i = np.interp(ell_band, ell_lo, Dl_lo)
+    Dl_hi_i = np.interp(ell_band, ell_hi, Dl_hi)
+    ax.fill_between(ell_band, Dl_lo_i, Dl_hi_i, color='tab:orange', alpha=0.25,
+                     label='Nikolic+23 Fig.1 (1.5 Gpc/1050$^3$, illustrative --\n'
+                           'different box size/resolution)')
+    ax.plot(ell_mid, Dl_mid, color='tab:orange', lw=1.2)
+
+
 def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source,
          wrap_cycle_seed=None, random_seed_override=None, skip_direct=False):
     with open(config_path) as f:
@@ -506,8 +541,19 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
              label=f'{src_word} P_diag (grouped, unshifted{wc_tag})')
     ax1.plot(ell_dec, Dl_total, color='tab:red', lw=1.5,
              label=f'{src_word} P_total (unshifted{wc_tag})')
-    ax1.plot(ell_shift, Dl_total_shift, color='tab:green', lw=1.5, ls=':',
-              label=f'{src_word} P_total (shifted control{wc_tag})')
+    if astro_overridden:
+        # Dropped at the user's request for the illustrative Nikolic-
+        # comparison plot (1 Oct 2026) -- decluttered in favor of the
+        # digitized Nikolic band below. Dl_total_shift is still COMPUTED
+        # above (ax2 and the periodicity print block both still use it) --
+        # only this one plot call is skipped, and only for astro_overridden
+        # runs; the default/fiducial periodicity-test plot is unchanged.
+        pass
+    else:
+        ax1.plot(ell_shift, Dl_total_shift, color='tab:green', lw=1.5, ls=':',
+                  label=f'{src_word} P_total (shifted control{wc_tag})')
+    if astro_overridden and source == 'coeval':
+        _plot_nikolic_band(ax1)
     ax1.set_xscale('log'); ax1.set_yscale('log')
     ax1.set_xlabel(r'$\ell$'); ax1.set_ylabel(r'$D_\ell$ [$\mu$K$^2$]')
     if astro_overridden and source == 'coeval':

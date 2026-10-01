@@ -91,10 +91,50 @@ hide the Delta-chi SHAPE (where a periodicity bump sits, whether it
 moves with box size) -- the thing this script's periodicity test
 actually asks about.
 
+ADDED (1Oct2026): astro_params/flag_options support, read from the
+loaded config's 21cmfast.astro_params / 21cmfast.flag_options (absent
+in fiducial.yaml -> both None -> every code path below behaves exactly
+as before this change). For the Nikolic/Mesinger/Gorce (2023)
+replication (configs/nikolic_mesinger.yaml), which uses a DIFFERENT
+astrophysics model (21cmFAST's mass-dependent SFR/escape-fraction
+model) at a DIFFERENT box/resolution than fiducial.yaml.
+
+Two things this touches, both deliberate -- read before trusting a run:
+
+1. is_fiducial_config's REUSE-closure_test.npz branch only checks
+   whether BOX_LEN/HII_DIM match the LOADED CONFIG's own values (i.e.
+   whether --box-len/--hii-dim were passed) -- it has no way to know
+   the loaded config itself might use entirely different astrophysics
+   than fiducial.yaml. Blindly trusting it here would compare a
+   Nikolic-astro-params STITCHED curve against a HII_EFF_FACTOR-astro
+   DIRECT reference from the original fiducial run -- same bug class as
+   the ne0/N_THREADS defaults this pipeline already got bitten by.
+   Fixed: a separate `astro_overridden` flag forces the FRESH-direct-
+   reference branch whenever astro_params/flag_options are set in the
+   config, regardless of box/dim override status. The "FIDUCIAL config"
+   vs "BOX-SIZE OVERRIDE" print below still goes by the original
+   box/dim-only check (unchanged, just means "no CLI override" -- not
+   literally fiducial.yaml); the added astro_overridden print makes the
+   actual physics being used unambiguous regardless of that wording.
+
+2. run_one_config() (coeval_sweep.py) is called with astro_params/
+   flag_options added to its kwargs whenever astro_overridden is True.
+   NOT YET VERIFIED that run_one_config accepts these -- coeval_sweep.py
+   wasn't available when this was written. Fails loudly (TypeError with
+   an explicit message) rather than silently falling back to the wrong
+   astrophysics model for the direct reference if it doesn't.
+
+3. tag_suffix gets an extra "_nikolic" whenever astro_overridden, on
+   top of the existing box-size suffix logic -- WITHOUT this, running
+   configs/nikolic_mesinger.yaml with no CLI override would write to
+   the exact same coherence_decomposition_fiducial.{png,npz} filenames
+   as the original 800Mpc/512^3 fiducial run, silently clobbering it.
+
 Usage
 -----
     python scripts/17_coherence_decomposition_fiducial.py --config configs/fiducial.yaml
     python scripts/17_coherence_decomposition_fiducial.py --config configs/fiducial.yaml --source native
+    python scripts/17_coherence_decomposition_fiducial.py --config configs/nikolic_mesinger.yaml
 """
 import argparse
 import os
@@ -141,15 +181,37 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(plot_dir, exist_ok=True)
 
+    # astro_params/flag_options: absent in fiducial.yaml -> both None ->
+    # astro_overridden False -> every branch below behaves exactly as
+    # before this was added. See module docstring point 1-3.
+    astro_params = sim_cfg.get('astro_params')
+    flag_options = sim_cfg.get('flag_options')
+    astro_overridden = astro_params is not None or flag_options is not None
+
     tag_suffix = "" if is_fiducial_config else f"_box{int(BOX_LEN)}"
     if source == 'native':
         tag_suffix += "_native"
     if wrap_cycle_seed is not None and source == 'coeval':
         tag_suffix += f"_wrapcycle{wrap_cycle_seed}"
+    if astro_overridden:
+        tag_suffix += "_nikolic"
     print(f"Coherence decomposition -- BOX_LEN={BOX_LEN} Mpc, "
           f"HII_DIM={HII_DIM} (dx={dx_this_run:.4f} Mpc), {len(z_snapshots)} z_snapshots, "
           f"source={source}. "
           f"{'FIDUCIAL config.' if is_fiducial_config else 'BOX-SIZE OVERRIDE -- periodicity test run.'}")
+    if astro_overridden:
+        print(f"ASTRO PARAMS OVERRIDDEN (not this pipeline's default HII_EFF_FACTOR model): "
+              f"astro_params={astro_params}, flag_options={flag_options}. The 'direct' "
+              f"reference below is recomputed FRESH at these params -- closure_test.npz "
+              f"is NOT reused regardless of box/dim override status. Output files get an "
+              f"extra '_nikolic' tag ({tag_suffix}) so they don't collide with the "
+              f"existing fiducial outputs.")
+        if source == 'native':
+            print("WARNING: astro_params/flag_options were set but --source native uses "
+                  "stitch_lightcone_native(), which this change does NOT touch -- these "
+                  "params are IGNORED for the stitched lightcone itself on the native path. "
+                  "Only the (already-recomputed) direct reference would reflect them. Use "
+                  "--source coeval for the Nikolic/Mesinger/Gorce replication.\n")
     if source == 'native':
         print("CAVEAT: velocity amplitude not independently validated for the native "
               "path -- see native_lightcone.py's docstring. Fine for the Delta-chi "
@@ -172,25 +234,53 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     chi_eff = float(closure['chi_eff'])
     z_lo, z_hi = float(closure['z_lo']), float(closure['z_hi'])
 
-    if is_fiducial_config or source == 'native':
+    if (is_fiducial_config and not astro_overridden) or source == 'native':
         # Reuse script 14's own trusted direct curve directly. For native at a
         # box-size override this is ALSO the fallback (see module docstring --
         # no native equivalent of coeval_sweep.run_one_config exists or is
-        # needed for what this test asks).
+        # needed for what this test asks). NOT taken when astro_overridden,
+        # even if box/dim match the loaded config's own values -- see module
+        # docstring point 1: closure_test.npz's astrophysics model is fixed
+        # to the ORIGINAL fiducial run's, never valid as a reference once the
+        # loaded config's own astro params differ from that.
         ell_direct, Dl_direct = closure['ell_direct'], closure['Dl_direct']
     else:
-        # Box size differs, coeval source -- coeval-direct's own P_qperp
-        # depends on box size/resolution, so recompute a FRESH direct
-        # reference at THIS run's own (BOX_LEN, HII_DIM), same as script 16's
-        # quicktest does.
+        # Box size differs, and/or astro params are overridden, coeval source
+        # -- coeval-direct's own P_qperp depends on both, so recompute a
+        # FRESH direct reference at THIS run's own (BOX_LEN, HII_DIM,
+        # astro_params), same as script 16's quicktest does for box size.
         print(f"Computing a FRESH coeval-direct reference at BOX_LEN={BOX_LEN}, "
               f"HII_DIM={HII_DIM} (closure_test.npz's own Dl_direct is fiducial-"
               f"specific, not reusable here)...")
         from ksz_pipeline.convergence.coeval_sweep import run_one_config as run_coeval_one_config
-        direct = run_coeval_one_config(BOX_LEN, HII_DIM, z_snapshots, cache_dir,
-                                        tag=f"coherence_direct{tag_suffix}",
-                                        N_THREADS=sim_cfg['N_THREADS'],
-                                        random_seed=sim_cfg['random_seed'])
+        run_one_config_kwargs = dict(
+            tag=f"coherence_direct{tag_suffix}",
+            N_THREADS=sim_cfg['N_THREADS'],
+            random_seed=sim_cfg['random_seed'],
+        )
+        if astro_overridden:
+            # MUST match the stitched calculation's astro_params/flag_options
+            # below, or D_direct and D_stitched silently describe two
+            # different astrophysics models. See module docstring point 2 --
+            # not yet verified run_one_config accepts these; fail loudly
+            # rather than silently proceeding with mismatched physics.
+            run_one_config_kwargs['astro_params'] = astro_params
+            run_one_config_kwargs['flag_options'] = flag_options
+        try:
+            direct = run_coeval_one_config(BOX_LEN, HII_DIM, z_snapshots, cache_dir,
+                                            **run_one_config_kwargs)
+        except TypeError as e:
+            if astro_overridden:
+                raise TypeError(
+                    "run_one_config() raised a TypeError, and astro_params/flag_options "
+                    "were being passed to it -- most likely it does not accept those "
+                    "kwargs yet. It needs the same astro_params/flag_options passthrough "
+                    "that coeval/fields.py and stitch_from_coeval.py already got, or this "
+                    "'direct' reference will silently use the WRONG astrophysics model "
+                    f"(this pipeline's default HII_EFF_FACTOR, not Nikolic et al.'s). "
+                    f"Original error: {e}"
+                ) from e
+            raise
         ell_direct, Dl_direct = direct['ells_direct'], direct['Dl_direct']
 
     d3000_direct = float(np.interp(3000, ell_direct, Dl_direct))
@@ -210,7 +300,8 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
             z_snapshots=z_snapshots, z_arr=z_arr, HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
             cache_dir=cache_dir, angle_deg=0.0,
             N_THREADS=sim_cfg['N_THREADS'], random_seed=sim_cfg['random_seed'],
-            wrap_cycle_seed=wrap_cycle_seed)
+            wrap_cycle_seed=wrap_cycle_seed,
+            astro_params=astro_params, flag_options=flag_options)
     else:  # source == 'native'
         print("Building NATIVE lightcone via py21cmfast's own run_lightcone()...")
         stitched = stitch_lightcone_native(
@@ -350,6 +441,8 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
 
     direct_label = 'coeval-direct (script 14)' if source == 'coeval' else \
                    'coeval-direct (script 14, ROUGH ANCHOR ONLY -- see caveat)'
+    if astro_overridden:
+        direct_label = 'coeval-direct (fresh, Nikolic astro params)'
     ax1.plot(ell_direct, Dl_direct, 'k-', lw=2, label=direct_label)
     src_word = "stitched" if source == "coeval" else "native"
     wc_tag = f", wrap_cycle_seed={wrap_cycle_seed}" if (wrap_cycle_seed is not None and source == 'coeval') else ""
@@ -361,8 +454,13 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
               label=f'{src_word} P_total (shifted control{wc_tag})')
     ax1.set_xscale('log'); ax1.set_yscale('log')
     ax1.set_xlabel(r'$\ell$'); ax1.set_ylabel(r'$D_\ell$ [$\mu$K$^2$]')
-    ax1.set_title('P_diag vs direct, fiducial resolution' if source == 'coeval'
-                  else f'P_diag vs direct, {source} source')
+    if astro_overridden and source == 'coeval':
+        ax1_title = 'P_diag vs direct, Nikolic/Mesinger/Gorce replication'
+    elif source == 'coeval':
+        ax1_title = 'P_diag vs direct, fiducial resolution'
+    else:
+        ax1_title = f'P_diag vs direct, {source} source'
+    ax1.set_title(ax1_title)
     ax1.legend(fontsize=8)
 
     valid = n_pairs > 0
@@ -389,6 +487,7 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     np.savez(f"{out_dir}/coherence_decomposition{tag_suffix or '_fiducial'}.npz",
               box_len=BOX_LEN, hii_dim=HII_DIM, source=source,
               wrap_cycle_seed=wrap_cycle_seed if wrap_cycle_seed is not None else -1,
+              astro_overridden=astro_overridden,
               ell_direct=ell_direct, Dl_direct=Dl_direct, d3000_direct=d3000_direct,
               ell_dec=ell_dec, Dl_total=Dl_total, Dl_diag=Dl_diag, Dl_off=Dl_off,
               ell_shift=ell_shift, Dl_total_shift=Dl_total_shift,

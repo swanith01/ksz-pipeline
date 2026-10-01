@@ -55,6 +55,16 @@ pixel aliasing nearest-neighbor rotation has at generic angles. This is
 additive: angle_deg alone (wrap_cycle_seed=None, the default) is
 untouched and remains exactly what every prior result in this
 investigation used.
+
+ADDED (1Oct2026): astro_params/flag_options passthrough on
+stitch_lightcone_from_coeval(), for the Nikolic/Mesinger/Gorce (2023)
+replication -- straight passthrough to coeval/fields.py's
+run_coeval_fields() (see that module's docstring for the
+USE_MASS_DEPENDENT_ZETA gotcha). Both default to None, giving every
+snapshot's run_coeval_fields() call the exact same arguments as before
+this change. Deliberately NOT threaded through stitch_field() itself --
+that function never touches py21cmfast, it only interpolates already-
+loaded boxes, so it has nothing to receive these for.
 """
 
 import numpy as np
@@ -323,7 +333,8 @@ def stitch_field(snapshot_boxes, snap_z, z_arr, z0, cell_size, ngrid,
 
 def stitch_lightcone_from_coeval(z_snapshots, z_arr, HII_DIM, BOX_LEN,
                                   cache_dir, angle_deg=0.0, N_THREADS=None,
-                                  random_seed=None, wrap_cycle_seed=None):
+                                  random_seed=None, wrap_cycle_seed=None,
+                                  astro_params=None, flag_options=None):
     """
     Build a full (density, xH, velocity_z) lightcone by running/loading
     coeval boxes at z_snapshots (via the shared, validated
@@ -354,6 +365,16 @@ def stitch_lightcone_from_coeval(z_snapshots, z_arr, HII_DIM, BOX_LEN,
                   LOS position; using different seeds per field would
                   break their physical correspondence (e.g. velocity
                   rotated one way, density another, at the same point).
+    astro_params : dict, optional -- straight passthrough to
+                  coeval/fields.py's run_coeval_fields() at every
+                  snapshot. Default None: omitted from those calls
+                  entirely, identical to behavior before this parameter
+                  existed. See fields.py's docstring -- also requires
+                  flag_options with USE_MASS_DEPENDENT_ZETA=True to take
+                  effect in 21cmFAST.
+    flag_options : dict, optional -- straight passthrough to
+                  run_coeval_fields() at every snapshot. Default None:
+                  omitted entirely, identical to prior behavior.
 
     Returns
     -------
@@ -375,7 +396,8 @@ def stitch_lightcone_from_coeval(z_snapshots, z_arr, HII_DIM, BOX_LEN,
     for z in snap_z:
         delta, xH, _vx, _vy, vz = run_coeval_fields(
             z, HII_DIM, BOX_LEN, cache_dir, N_THREADS=N_THREADS,
-            random_seed=random_seed)
+            random_seed=random_seed, astro_params=astro_params,
+            flag_options=flag_options)
         delta_boxes[z] = delta
         xH_boxes[z]    = xH
         vz_boxes[z]    = vz

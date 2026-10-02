@@ -79,6 +79,94 @@ Results land in `data/products/*.npz`. Plot them with
 
 ---
 
+## AMBER cross-check — progress (updated 2026-10-02)
+
+AMBER (github.com/hytrac/amber) is used as an independent, semi-numerical
+check on this repo's own kSZ methods — see `docs/amber_integration.md`
+for the full technical conventions/unit-mapping writeup. Summary of
+where this stands:
+
+**Done and trusted:**
+
+- Field-dump patch (`external/amber_patch/0001-...patch`) + adapter
+  (`src/ksz_pipeline/amber/`) let AMBER's fields feed straight into this
+  repo's own `compute_cell`/`qperp_power` — see the validation gate
+  results table in `docs/amber_integration.md`. No admin rights needed;
+  `build_amber.sh` clones, patches and builds AMBER against ifort+MKL.
+- **Chen et al. (2023) Fig. 10 reproduction + a 256³ (z_mid, Δz) sweep**
+  are done and committed (`scripts/40_run_amber_sweep.py` /
+  `41_plot_amber_sweep.py`, plot in `data/plots/26Sep-amber/`).
+- **AMBER's native ray-traced lightcone (`Map=write`, real HEALPix
+  build) now actually runs**, not just builds — confirmed on swarm
+  2026-09-26 at N=128/Nside=128: produces real `cl_ksz_healpix.txt`/
+  `cl_kappa_healpix.txt`/`cl_tau_healpix.txt` and FITS maps, cross-checked
+  against an independent `healpy.anafast` on the map itself (agreement
+  to ~0.1–10%, worse only near the map's own `lmax`, as expected from
+  AMBER's `Nlmax=3·Nside` convention).
+- **Overlay: AMBER's native map-based C_ℓ vs. its own Limber-from-
+  P_qperp C_ℓ, same realization.** Shows real excess power at low–mid ℓ
+  (ratio ~1.2–144× across ℓ=100–384), converging toward the Limber value
+  near the map's ℓ_max. Consistent with either known Limber breakdown at
+  low ℓ or AMBER's angular periodicity (the box is tiled repeatedly
+  across the sky at fixed shell radius, confirmed by reading `map_make`'s
+  plain-modulo wrapping in `cmbreion.f90` — no derandomizing rotation
+  between periodic copies). Not distinguishable from a single map alone.
+- **2 Gpc/h, N=1536 fiducial-point run (Chen+23 fiducial: z_mid=8,
+  Δz=4, A_z=3, M_h=1e8 M_sun, λ_mfp=3 Mpc/h), full 28-shell history
+  (z=4.5–18.5), `Map=no`, completed successfully 2026-10-01** (~1h14m
+  runtime once running). Confirms **2048³ is infeasible on this
+  cluster** — no node has enough RAM — so 1536³ (dx≈1.30 Mpc/h/cell) is
+  used instead; this is already reflected in the commit history.
+  Produced the Limber-side products (`cl_kappa.txt`, `cl_tau.txt`,
+  `cl_ksz.txt`, 28× `power_z=*.txt`, `tau.txt`) cleanly; separately
+  validated with `scripts/30_amber_validation_gate.py` run as its own
+  lightweight follow-up job (see caveat below).
+
+**Explicitly shelved (a scope decision, not a blocker):**
+
+- The angular D_diag/D_off cross-shell-coherence decomposition — i.e.
+  measuring whether AMBER's angular periodicity shows up as coherent
+  cross-shell power in its native lightcone — would need a second
+  Fortran patch (`0002-dump-shell-ksz-maps.patch`, stacked on `0001`) to
+  dump AMBER's per-shell HEALPix maps, which stock AMBER never writes.
+  That patch plus the full angular-harmonics decomposition module were
+  drafted and validated against synthetic HEALPix data, but **are not
+  deployed**. Decision made 2026-09-29: not worth the additional
+  source-patching + time commitment right now, given the advisor's
+  priority to move on to the kSZ–LAE work. Revisit only if explicitly
+  re-raised.
+
+**Operational lessons from the 2 Gpc/h run (useful for any future AMBER
+PBS job on this cluster):**
+
+- `set -u` (nounset) must be turned on **after** sourcing Intel's
+  `setvars.sh`, never before — that script isn't nounset-safe. (Same
+  rule `build_amber.sh` already follows; a new PBS script missed it.)
+- A relative `-o`/working-directory path is resolved against
+  `$PBS_O_WORKDIR`, which is wherever `qsub` was run **from**, not where
+  the `.pbs` script file lives — always `cd` into the repo root
+  immediately before `qsub`, even when giving the script an absolute
+  path.
+- A PBS batch job does **not** inherit the submitting shell's conda
+  activation — `python` is not on `PATH` by default inside the job.
+  Explicitly `source .../conda.sh && conda activate <env>` inside the
+  script, before `set -u`.
+- Running `scripts/30_amber_validation_gate.py` **chained immediately
+  after** `amber.x` inside the same job can get OOM-killed (`exit 137`)
+  even though the gate script itself only reads small files (`tau.txt`,
+  `amber_run.json`) — the preceding run's ~1.6 TB of `fields_z=*.dat`
+  writes leave lingering page-cache pressure against the job's memory
+  cgroup. Run the gate as its own small, separate job (or interactively)
+  after the main run finishes instead.
+
+**Storage flag:** one fiducial point at N=1536 wrote **~1.6 TB** of raw
+per-shell `fields_z=*.dat` dumps. Running the remaining 15 Chen+23 sweep
+points at this resolution would need **~25 TB** total if those raw dumps
+are all kept — worth deciding a retention policy (e.g. keep only
+`power_z=*.txt`/`cl_*.txt` long-term) before that sweep is launched.
+
+---
+
 ## Repository structure
 
 ```
@@ -131,6 +219,11 @@ Things that are genuinely unresolved right now, not history:
   Root cause was never found; the stitched-lightcone method exists
   specifically to sidestep it. Not planned to be revisited unless
   something changes.
+- **AMBER's native-map excess power (low–mid ℓ) is not yet root-caused**
+  — periodicity vs. Limber breakdown are both plausible and not yet
+  distinguished from a single map; see "AMBER cross-check" above. The
+  angular D_diag/D_off decomposition that would disambiguate this is
+  deliberately shelved for now, not forgotten.
 - **`patchy/`, `reion_history/`, `io/` modules** referenced in earlier
   planning don't exist yet. Patchy optical-depth screening and the
   reionization-history (`HII_EFF_FACTOR`) parameter scan are not yet

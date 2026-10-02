@@ -64,6 +64,7 @@ data:
     t_STAR:      0.392
   flag_options:
     USE_MASS_DEPENDENT_ZETA: true
+    PHOTON_CONS: true
 
 # ── Lightcone kSZ settings (native/ray-traced path -- unchanged, carried
 #    over from fiducial.yaml as-is; not exercised by the coeval-stitching

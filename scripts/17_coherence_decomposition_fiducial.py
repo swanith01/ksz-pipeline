@@ -263,6 +263,12 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
         tag_suffix += "_native"
     if wrap_cycle_seed is not None and source == 'coeval':
         tag_suffix += f"_wrapcycle{wrap_cycle_seed}"
+    elif random_seed_override is not None:
+        # UNFIXED-stitching control runs (no --wrap-cycle-seed) of an ensemble:
+        # without this tag every seed would write the same filename and
+        # overwrite the last. Wrap-cycle runs already encode the seed above,
+        # and runs without --random-seed are untouched (byte-identical names).
+        tag_suffix += f"_seed{random_seed_override}"
     if astro_overridden:
         tag_suffix += "_nikolic"
     print(f"Coherence decomposition -- BOX_LEN={BOX_LEN} Mpc, "

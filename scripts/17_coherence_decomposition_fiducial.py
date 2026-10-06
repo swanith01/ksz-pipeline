@@ -174,7 +174,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from ksz_pipeline.ksz.stitch_from_coeval import stitch_lightcone_from_coeval, build_los_z_grid
+from ksz_pipeline.ksz.stitch_from_coeval import (stitch_lightcone_from_coeval, build_los_z_grid,
+                                                  wrap_cycle_index, cycle_angle)
 from ksz_pipeline.ksz.native_lightcone import stitch_lightcone_native
 from ksz_pipeline.ksz.optical_depth import (compute_tau, compute_visibility,
                                              analytic_tau_below, compute_patchy_mask)
@@ -223,7 +224,8 @@ def _plot_nikolic_band(ax):
 
 
 def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source,
-         wrap_cycle_seed=None, random_seed_override=None, skip_direct=False):
+         wrap_cycle_seed=None, random_seed_override=None, skip_direct=False,
+         wrap_mode='wrap'):
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
     sim_cfg = cfg['21cmfast']
@@ -263,6 +265,8 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
         tag_suffix += "_native"
     if wrap_cycle_seed is not None and source == 'coeval':
         tag_suffix += f"_wrapcycle{wrap_cycle_seed}"
+        if wrap_mode != 'wrap':
+            tag_suffix += f"_{wrap_mode.replace('-', '')}"   # e.g. _gridwrap
     elif random_seed_override is not None:
         # UNFIXED-stitching control runs (no --wrap-cycle-seed) of an ensemble:
         # without this tag every seed would write the same filename and
@@ -384,8 +388,10 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     # stitched fields -- ONE call differs by source, everything else the
     # same regardless of which loader built it (matching output contract)
     # ================================================================
+    cycle_ids = np.array([], dtype=int)
+    cycle_angles_deg = np.array([], dtype=float)
     if source == 'coeval':
-        wc_note = f" [wrap_cycle_seed={wrap_cycle_seed}]" if wrap_cycle_seed is not None else ""
+        wc_note = f" [wrap_cycle_seed={wrap_cycle_seed}, wrap_mode={wrap_mode}]" if wrap_cycle_seed is not None else ""
         print(f"Building stitched lightcone (fiducial scale){wc_note}...")
         cell_size = BOX_LEN / HII_DIM
         z_arr = build_los_z_grid(z_min, z_max, cell_size)
@@ -394,7 +400,18 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
             cache_dir=cache_dir, angle_deg=0.0,
             N_THREADS=sim_cfg['N_THREADS'], random_seed=stitched_random_seed,
             wrap_cycle_seed=wrap_cycle_seed,
-            astro_params=astro_params, flag_options=flag_options)
+            astro_params=astro_params, flag_options=flag_options,
+            wrap_mode=wrap_mode)
+        if wrap_cycle_seed is not None:
+            # Record the angles actually used, so a run can be reproduced
+            # without relying on numpy's default_rng stream staying stable
+            # across versions (angles were derived from
+            # default_rng((seed, cycle)).uniform(0, 360)).
+            _z0 = float(np.min(z_arr))
+            cycle_ids = np.unique([wrap_cycle_index(z, _z0, cell_size, HII_DIM) for z in z_arr])
+            cycle_angles_deg = np.array([cycle_angle(int(c), wrap_cycle_seed) for c in cycle_ids])
+            print("  per-cycle rotation angles [deg]: " +
+                  ", ".join(f"{int(c)}:{a:.4f}" for c, a in zip(cycle_ids, cycle_angles_deg)))
     else:  # source == 'native'
         print("Building NATIVE lightcone via py21cmfast's own run_lightcone()...")
         stitched = stitch_lightcone_native(
@@ -595,6 +612,8 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     np.savez(f"{out_dir}/coherence_decomposition{tag_suffix or '_fiducial'}.npz",
               box_len=BOX_LEN, hii_dim=HII_DIM, source=source,
               wrap_cycle_seed=wrap_cycle_seed if wrap_cycle_seed is not None else -1,
+              wrap_mode=wrap_mode if wrap_cycle_seed is not None else 'none',
+              cycle_ids=cycle_ids, cycle_angles_deg=cycle_angles_deg,
               astro_overridden=astro_overridden,
               ell_direct=ell_direct, Dl_direct=Dl_direct, d3000_direct=d3000_direct,
               ell_dec=ell_dec, Dl_total=Dl_total, Dl_diag=Dl_diag, Dl_off=Dl_off,
@@ -638,6 +657,13 @@ if __name__ == "__main__":
                               "docstring) -- for ensemble runs where one shared reference "
                               "(from a single run without this flag) covers the whole "
                               "batch. Default False preserves existing behaviour exactly.")
+    parser.add_argument("--wrap-mode", choices=["wrap", "grid-wrap"], default="wrap",
+                         help="scipy map_coordinates boundary mode for the wrap-cycle "
+                              "bilinear rotation. 'wrap' (default) has period n-1 and "
+                              "reproduces every result before 6Oct2026; 'grid-wrap' has "
+                              "the correct period n. Only matters with --wrap-cycle-seed. "
+                              "Non-default output files get a _gridwrap tag, so they "
+                              "never overwrite the default-mode ones.")
     args = parser.parse_args()
     main(args.config, args.shift_seed, args.box_len, args.hii_dim, args.source,
-         args.wrap_cycle_seed, args.random_seed, args.skip_direct)
+         args.wrap_cycle_seed, args.random_seed, args.skip_direct, args.wrap_mode)

@@ -28,6 +28,12 @@ def compute_ksz_map(density_1plus, x_HII_field, v_los_Mpc_s,
     ds             : ndarray (Nz-1,)     comoving slice widths [Mpc]
     visibility_3D  : ndarray (..., Nz)   exp(-tau) broadcast to field shape
     ne0            : float, optional     [cm^-3], defaults to NE0_HYDROGEN_ONLY
+                     (2.06e-7). NOTE: coherence_decomposition.py's own default was
+                     later changed to ne0_cgs() (He-inclusive, 2.0644e-7, +0.2%);
+                     this function's default was deliberately left alone so every
+                     earlier result still reproduces. scripts/17 passes ne0_cgs()
+                     explicitly. Pass ne0 explicitly in new code; the ~0.4% D_ell
+                     difference between the two defaults is the only effect.
     patchy_mask_3D : ndarray (..., Nz), optional   from
                      optical_depth.compute_patchy_mask(); zeroes out
                      slices outside the 99.99%-to-0.01%-neutral patchy

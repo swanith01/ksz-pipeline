@@ -238,21 +238,33 @@ def rotated_coords(ngrid, angle_deg):
     return ic, jc
 
 
-def get_slab_bilinear(box, y_cell, ic, jc):
+def get_slab_bilinear(box, y_cell, ic, jc, wrap_mode='wrap'):
     """
     Bilinearly-interpolated, periodically-wrapped rotated (ngrid, ngrid)
     transverse slab of `box` at LOS index y_cell, at the continuous
     rotated coordinates (ic, jc) from rotated_coords(). order=1 is
-    bilinear; mode='wrap' makes the interpolation itself periodic, so a
+    bilinear; wrap_mode makes the interpolation itself periodic, so a
     coordinate just past the last pixel blends smoothly with the first
     (the continuous analogue of get_slab's integer '% ngrid' wrap).
+
+    wrap_mode : 'wrap' (default) or 'grid-wrap'.
+        'wrap' is scipy's mode='wrap', which treats index 0 and index n-1
+        as the SAME point, i.e. the box is wrapped with period n-1, not n
+        (verified 6Oct2026: on arange(8), x=8.0 returns 1.0, not 0.0). Every
+        result produced before that date used this mode, and it is the
+        default so those results stay reproducible bit for bit.
+        'grid-wrap' has the correct period n for a periodic grid.
+        Effect on D_ell NOT measured at the time of writing -- see
+        scripts/17's --wrap-mode for the A/B.
     """
+    if wrap_mode not in ('wrap', 'grid-wrap'):
+        raise ValueError(f"wrap_mode must be 'wrap' or 'grid-wrap', got {wrap_mode!r}")
     return map_coordinates(box[:, :, y_cell], [ic, jc], order=1,
-                            mode='wrap')
+                            mode=wrap_mode)
 
 
 def stitch_field(snapshot_boxes, snap_z, z_arr, z0, cell_size, ngrid,
-                  angle_deg=0.0, wrap_cycle_seed=None):
+                  angle_deg=0.0, wrap_cycle_seed=None, wrap_mode='wrap'):
     """
     Interpolate one field, already loaded per snapshot redshift, onto a
     continuous LOS redshift grid z_arr.
@@ -294,6 +306,10 @@ def stitch_field(snapshot_boxes, snap_z, z_arr, z0, cell_size, ngrid,
                      cycle_angle above), with bilinear (not nearest-
                      neighbor) sampling to avoid the aliasing nearest-
                      neighbor rotation has at generic angles.
+    wrap_mode      : 'wrap' (default, what every result before 6Oct2026
+                     used) or 'grid-wrap'. Only used when wrap_cycle_seed
+                     is not None -- see get_slab_bilinear for the period-
+                     (n-1) vs period-n difference.
 
     Returns
     -------
@@ -323,7 +339,8 @@ def stitch_field(snapshot_boxes, snap_z, z_arr, z0, cell_size, ngrid,
             angle = cycle_angle(cycle, wrap_cycle_seed)
             coords_by_cycle[cycle] = rotated_coords(ngrid, angle)
         ic, jc = coords_by_cycle[cycle]
-        slabs = np.stack([get_slab_bilinear(snapshot_boxes[sz], y_cell, ic, jc)
+        slabs = np.stack([get_slab_bilinear(snapshot_boxes[sz], y_cell, ic, jc,
+                                               wrap_mode)
                            for sz in snap_z], axis=-1)
         interp = interp1d(snap_z, slabs, axis=-1, bounds_error=False,
                            fill_value="extrapolate")
@@ -334,7 +351,8 @@ def stitch_field(snapshot_boxes, snap_z, z_arr, z0, cell_size, ngrid,
 def stitch_lightcone_from_coeval(z_snapshots, z_arr, HII_DIM, BOX_LEN,
                                   cache_dir, angle_deg=0.0, N_THREADS=None,
                                   random_seed=None, wrap_cycle_seed=None,
-                                  astro_params=None, flag_options=None):
+                                  astro_params=None, flag_options=None,
+                                  wrap_mode='wrap'):
     """
     Build a full (density, xH, velocity_z) lightcone by running/loading
     coeval boxes at z_snapshots (via the shared, validated
@@ -365,6 +383,9 @@ def stitch_lightcone_from_coeval(z_snapshots, z_arr, HII_DIM, BOX_LEN,
                   LOS position; using different seeds per field would
                   break their physical correspondence (e.g. velocity
                   rotated one way, density another, at the same point).
+    wrap_mode   : 'wrap' (default) or 'grid-wrap' -- see stitch_field /
+                  get_slab_bilinear. Only matters when wrap_cycle_seed is
+                  set. Default reproduces all earlier results exactly.
     astro_params : dict, optional -- straight passthrough to
                   coeval/fields.py's run_coeval_fields() at every
                   snapshot. Default None: omitted from those calls
@@ -403,11 +424,11 @@ def stitch_lightcone_from_coeval(z_snapshots, z_arr, HII_DIM, BOX_LEN,
         vz_boxes[z]    = vz
 
     density    = stitch_field(delta_boxes, snap_z, z_arr, z0, cell_size,
-                               HII_DIM, angle_deg, wrap_cycle_seed)
+                               HII_DIM, angle_deg, wrap_cycle_seed, wrap_mode)
     xH_box     = stitch_field(xH_boxes,    snap_z, z_arr, z0, cell_size,
-                               HII_DIM, angle_deg, wrap_cycle_seed)
+                               HII_DIM, angle_deg, wrap_cycle_seed, wrap_mode)
     velocity_z = stitch_field(vz_boxes,    snap_z, z_arr, z0, cell_size,
-                               HII_DIM, angle_deg, wrap_cycle_seed)
+                               HII_DIM, angle_deg, wrap_cycle_seed, wrap_mode)
 
     pos_axis = np.array([comoving_distance_mpc(z) for z in z_arr])
 

@@ -154,25 +154,32 @@ def stitched_sweep_figure(kind, prod, out_dir, seed):
     d = np.load(f, allow_pickle=True)
     tags = [str(t) for t in d['tags']]
     cols = ramp(len(tags))
+    # same-box, same-resolution coeval-direct counterparts (already computed by
+    # the coeval sweeps; tags are identical: box<L>_N<N> / res<N>)
+    cf = f"{prod}/convergence_coeval_{kind}_full.npz"
+    C = np.load(cf, allow_pickle=True) if os.path.exists(cf) else None
+    if C is None:
+        print(f"note: {cf} not found -> no coeval-direct dashed curves")
     fig, (aL, aR) = plt.subplots(1, 2, figsize=(12.5, 5.0))
     handles = []
-    cl = f"{prod}/closure_test.npz"
-    if os.path.exists(cl):
-        c = np.load(cl)
-        aL.plot(c['ell_direct'], c['Dl_direct'], color=INK, lw=1.6, ls='--')
-        handles.append(Line2D([0], [0], color=INK, lw=1.6, ls='--',
-                              label="coeval-direct, matched window   " + d3000_label(d3000(c['ell_direct'], c['Dl_direct']))))
     for i, (tag, col) in enumerate(zip(tags, cols)):
         ell, Dl = d[f'ell_{i}'], d[f'Dl_{i}']
         if kind == 'boxsize':
-            L, N = tag[3:].split('_N'); lab = f"L = {L} Mpc ({N}³)"
+            L, N = tag[3:].split('_N'); lab = f"L = {L} Mpc ({N}\u00b3)"
         else:
             lab = f"HII_DIM = {tag[3:]}"
-        lab += "   " + d3000_label(d3000(ell, Dl))
+        v_st = d3000(ell, Dl)
+        lab += "   stitched " + d3000_label(v_st).replace(r"$D_{3000}$ = ", "")
         aL.plot(ell, Dl, color=col, lw=2.2)
+        if C is not None and f'ell_{tag}' in C.files:
+            v_di = d3000(C[f'ell_{tag}'], C[f'Dl_{tag}'])
+            aL.plot(C[f'ell_{tag}'], C[f'Dl_{tag}'], color=col, lw=1.6, ls='--')
+            lab += " | direct " + d3000_label(v_di).replace(r"$D_{3000}$ = ", "")
         if f'z_hist_{i}' in d.files:
             aR.plot(d[f'z_hist_{i}'], d[f'xH_hist_{i}'], color=col, lw=2.2)
         handles.append(Line2D([0], [0], color=col, lw=2.4, label=lab))
+    handles += [Line2D([0], [0], color=MUTED, lw=2.2, label='solid: wrap-cycle stitched'),
+                Line2D([0], [0], color=MUTED, lw=1.6, ls='--', label='dashed: coeval-direct, same box and resolution')]
     style_power(aL); style_hist(aR)
     sub = {'boxsize': 'box size, cell size fixed at 6.25 Mpc',
            'resolution': 'resolution, box fixed at 800 Mpc'}[kind]

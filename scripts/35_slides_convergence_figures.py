@@ -46,8 +46,8 @@ plt.rcParams.update({
     'font.size': 13, 'axes.titlesize': 14, 'axes.labelsize': 13,
     'legend.fontsize': 10.5, 'axes.spines.top': False, 'axes.spines.right': False,
     'axes.edgecolor': MUTED, 'axes.labelcolor': INK, 'text.color': INK,
-    'xtick.color': MUTED, 'ytick.color': MUTED, 'axes.grid': True,
-    'grid.color': '#e4e4e0', 'grid.linewidth': 0.7, 'savefig.facecolor': 'white',
+    'xtick.color': MUTED, 'ytick.color': MUTED, 'axes.grid': False,
+    'savefig.facecolor': 'white',
     'figure.facecolor': 'white',
 })
 
@@ -74,8 +74,8 @@ def style_power(ax):
     ax.set_xscale('log'); ax.set_yscale('log')
     ax.set_xlabel(r'$\ell$'); ax.set_ylabel(r'$D_\ell\ [\mu\mathrm{K}^2]$')
     ax.axvline(3000, color=MUTED, ls=':', lw=1.0)
-    ax.text(3000 / 1.06, 0.97, r'$\ell=3000$', transform=ax.get_xaxis_transform(),
-            color=MUTED, fontsize=10, va='top', ha='right')
+    ax.text(3000 * 1.06, 0.02, r'$\ell=3000$', transform=ax.get_xaxis_transform(),
+            color=MUTED, fontsize=10, va='bottom', ha='left')
     ax.set_title('kSZ power')
 
 

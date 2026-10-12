@@ -58,27 +58,58 @@ def shell_edges(z, zdel, spacing, zmin):
 def gate1(run, N, L_h, h, zre):
     worst, n = 0.0, 0
     Lm = L_h / h
-    f = np.fft.fftfreq(N, Lm / N) * 2 * np.pi
-    kx, ky, kz = np.meshgrid(f, f, f, indexing='ij')
-    k2 = kx**2 + ky**2 + kz**2
-    k2s = np.where(k2 == 0, np.inf, k2)
-    kk = np.rint(np.sqrt(k2) / (2 * np.pi / Lm)).astype(int)
+    # Memory fix: 1D broadcastable frequency arrays instead of three full
+    # (N,N,N) float64 grids from meshgrid -- was ~174GB resident for the
+    # whole function just for kx,ky,kz,k2,k2s,kk. float32 is ample for
+    # bin assignment and the transverse projection (well under the 1e-3
+    # gate tolerance).
+    f = (np.fft.fftfreq(N, Lm / N) * 2 * np.pi).astype(np.float32)
+    fx = f.reshape(N, 1, 1)
+    fy = f.reshape(1, N, 1)
+    fz = f.reshape(1, 1, N)
+    k2 = fx**2 + fy**2 + fz**2
+    kk = np.rint(np.sqrt(k2) / (2 * np.pi / Lm)).astype(np.int32)
+    k2s = np.where(k2 == 0, np.float32(np.inf), k2)
+    del k2
+    zre32 = zre if zre.dtype == np.float32 else zre.astype(np.float32)
+
     for fpath in io.list_field_files(os.path.join(run, 'output', 'cmb')):
         z, rho, mom = io.read_fields(fpath, N)
-        ion = z < zre
+        ion = z < zre32
         if ion.mean() < 1e-3 or ion.mean() > 0.999:
+            del rho, mom, ion
             continue
-        q = mom.astype(np.float64) * adapter.KMS_TO_CMS * ion
-        Q = np.fft.fftn(q, axes=(1, 2, 3)) * (Lm / N)**3
-        kd = (Q[0] * kx + Q[1] * ky + Q[2] * kz) / k2s
-        p = (np.abs(Q - np.stack([kx, ky, kz]) * kd)**2).sum(0) / Lm**3 / 2
+
+        # Memory fix: one momentum component at a time, float32/complex64,
+        # instead of stacking (3,N,N,N) float64 -> complex128 arrays (was
+        # q:~87GB + Q:~174GB + several more full-box temporaries -- 500GB+
+        # transient for a single shell).
+        Qs = []
+        for c in range(3):
+            qc = (mom[c].astype(np.float32) * np.float32(adapter.KMS_TO_CMS)) * ion
+            Qc = np.fft.fftn(qc).astype(np.complex64) * np.float32((Lm / N)**3)
+            Qs.append(Qc)
+            del qc
+        del rho, mom, ion
+
+        kd = (Qs[0] * fx + Qs[1] * fy + Qs[2] * fz) / k2s
+        p = np.zeros((N, N, N), dtype=np.float32)
+        for Qc, fc in zip(Qs, (fx, fy, fz)):
+            diff = Qc - fc * kd
+            p += diff.real**2 + diff.imag**2
+            del diff
+        del Qs, kd
+        p /= (Lm**3 * 2)
+
         ours = np.array([p[kk == b].mean() for b in range(1, N // 2 + 1)])
+        del p
         pf = os.path.join(run, 'output', 'cmb', f'power_z={z:05.2f}.txt')
         a = io.read_amber_power(pf)
         _, Pa = adapter.amber_pqq_to_repo(a['k_h'], a['P_qq'], h)
         r = ours / Pa[:N // 2]
         worst = max(worst, float(np.abs(r - 1).max()))
         n += r.size
+
     ok = n > 0 and worst < 1e-3
     print(f"GATE 1  per-z P_qperp, same bins, {n} (z,k) points: "
           f"max|ratio-1| = {worst:.2e}   {'PASS' if ok else 'FAIL'}")

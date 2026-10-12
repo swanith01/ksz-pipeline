@@ -37,7 +37,7 @@ from ksz_pipeline.convergence.param_lists import build_param_list
 from ksz_pipeline.plotting.convergence_plots import plot_d3000_convergence
 
 
-def main(config_path, sweep, angle_deg=0.0):
+def main(config_path, sweep, angle_deg=0.0, wrap_cycle_seed=None, wrap_mode='wrap'):
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
 
@@ -68,8 +68,10 @@ def main(config_path, sweep, angle_deg=0.0):
     d3000_direct_matched = float(np.interp(3000, closure['ell_direct'], closure['Dl_direct']))
 
     param_list, xlabel, x_values = build_param_list(sweep, conv_cfg)
+    method = (f"wrap_cycle_seed={wrap_cycle_seed}, wrap_mode={wrap_mode}"
+              if wrap_cycle_seed is not None else f"angle_deg={angle_deg}")
     print(f"Stitched-lightcone {sweep} convergence sweep: "
-          f"{len(param_list)} configurations, angle_deg={angle_deg}")
+          f"{len(param_list)} configurations, {method}")
     print(f"Using matched window z=[{z_lo:.2f}, {z_hi:.2f}] and chi_eff={chi_eff:.1f} Mpc "
           f"from closure_test.npz (script 14) -- FIXED across every point in this sweep.")
     for L, N, tag in param_list:
@@ -78,7 +80,8 @@ def main(config_path, sweep, angle_deg=0.0):
     results = run_sweep(param_list, z_snapshots, z_min, z_max, cache_dir,
                          angle_deg=angle_deg, N_THREADS=sim_cfg['N_THREADS'],
                          random_seed=sim_cfg['random_seed'],
-                         z_lo=z_lo, z_hi=z_hi, chi_Mpc=chi_eff)
+                         z_lo=z_lo, z_hi=z_hi, chi_Mpc=chi_eff,
+                         wrap_cycle_seed=wrap_cycle_seed, wrap_mode=wrap_mode)
 
     print(f"\n{'tag':<16} {'n_lc_pix':>10} {'D3000':>12}")
     print("-" * 40)
@@ -88,7 +91,13 @@ def main(config_path, sweep, angle_deg=0.0):
         D3000_vals.append(d3000)
         print(f"{tag:<16} {results[tag]['n_lc_pix']:>10} {d3000:>12.4g}")
 
-    summary_path = f"{out_dir}/convergence_stitched_{sweep}_angle{angle_deg:g}.npz"
+    # Wrap-cycle runs get their own file names (never overwrite the fixed-angle
+    # ones); default (--wrap-cycle-seed omitted) names are unchanged.
+    if wrap_cycle_seed is not None:
+        name_tag = f"wrapcycle{wrap_cycle_seed}" + ("" if wrap_mode == 'wrap' else "_gridwrap")
+    else:
+        name_tag = f"angle{angle_deg:g}"
+    summary_path = f"{out_dir}/convergence_stitched_{sweep}_{name_tag}.npz"
     save_dict = dict(x_values=x_values, D3000=D3000_vals,
                       tags=[p[2] for p in param_list],
                       chi_eff=chi_eff, z_lo=z_lo, z_hi=z_hi,
@@ -100,13 +109,16 @@ def main(config_path, sweep, angle_deg=0.0):
         save_dict[f"ell_{i}"]     = results[tag]['ell']
         save_dict[f"Dl_{i}"]      = results[tag]['Dl']
         save_dict[f"Dl_err_{i}"]  = results[tag]['Dl_err']
+        # Reionisation history of THIS stitched lightcone (added 12Oct2026)
+        save_dict[f"z_hist_{i}"]  = results[tag]['z_arr_full']
+        save_dict[f"xH_hist_{i}"] = results[tag]['xH_mean_z']
     np.savez(summary_path, **save_dict)
     print(f"\nSaved -> {summary_path}")
     print(f"(NOTE: this OVERWRITES any earlier {sweep} sweep at this path -- if it "
           f"included points under the OLD convention, those numbers are superseded, "
           f"not preserved alongside these.)")
 
-    plot_path = f"{plot_dir}/D3000_convergence_stitched_{sweep}_angle{angle_deg:g}"
+    plot_path = f"{plot_dir}/D3000_convergence_stitched_{sweep}_{name_tag}"
     plot_d3000_convergence(
         x_values, {'Stitched lightcone': D3000_vals},
         xlabel=xlabel, title=f'Stitched-lightcone {sweep} convergence, matched window',
@@ -121,5 +133,10 @@ if __name__ == "__main__":
     parser.add_argument("--config", default="configs/fiducial.yaml")
     parser.add_argument("--sweep", choices=["boxsize", "resolution"], required=True)
     parser.add_argument("--angle-deg", type=float, default=0.0)
+    parser.add_argument("--wrap-cycle-seed", type=int, default=None,
+                        help="use per-wrap-cycle rotation (stitch_from_coeval.py) instead of a "
+                             "single fixed --angle-deg. Default None = old behaviour, old file names.")
+    parser.add_argument("--wrap-mode", choices=["wrap", "grid-wrap"], default="wrap")
     args = parser.parse_args()
-    main(args.config, args.sweep, angle_deg=args.angle_deg)
+    main(args.config, args.sweep, angle_deg=args.angle_deg,
+         wrap_cycle_seed=args.wrap_cycle_seed, wrap_mode=args.wrap_mode)

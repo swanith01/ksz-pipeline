@@ -103,6 +103,10 @@ def fresh_direct_curve(s23, cfg, zs_m):
     is any drift specific to the stitching/interpolation machinery below?
     Cheap: qperp_power on already-cached coeval boxes, no new simulation."""
     ref = s23.build_reference_results(cfg, zs_m)
+    # snapshot-level mean neutral fraction of THIS subset, for the
+    # reionisation-history panel of the slides figure (added 12Oct2026)
+    zs_all = np.array(sorted(ref), dtype=float)
+    xH_snap = np.array([ref[z]["xH_mean"] for z in sorted(ref)], dtype=float)
     zs_ok = s23.self_consistent_window(ref)
     if set(zs_ok) != set(zs_m):
         log.warning("  fresh-direct: dropping %s (crossed patchy threshold "
@@ -110,10 +114,10 @@ def fresh_direct_curve(s23, cfg, zs_m):
                    sorted(set(zs_m) - set(zs_ok)))
     ref = {z: ref[z] for z in zs_ok}
     ell_d, Dl_d, *_ = compute_cell(ref)
-    return ell_d, Dl_d
+    return ell_d, Dl_d, zs_all, xH_snap
 
 
-def run_one_multiple(zs_m, cfg, chi_eff, z_lo, z_hi):
+def run_one_multiple(zs_m, cfg, chi_eff, z_lo, z_hi, wrap_cycle_seed=None, wrap_mode='wrap'):
     """One dz_multiple's worth of: stitch -> tau/visibility -> window ->
     per-slice theta -> group-by-snapshot -> decompose. Exactly script 17's
     own sequence, called directly rather than imported from it."""
@@ -127,12 +131,14 @@ def run_one_multiple(zs_m, cfg, chi_eff, z_lo, z_hi):
     stitched = stitch_lightcone_from_coeval(
         z_snapshots=zs_m, z_arr=z_arr, HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
         cache_dir=cache_dir, angle_deg=0.0,
-        N_THREADS=sim_cfg["N_THREADS"], random_seed=sim_cfg["random_seed"])
+        N_THREADS=sim_cfg["N_THREADS"], random_seed=sim_cfg["random_seed"],
+        wrap_cycle_seed=wrap_cycle_seed, wrap_mode=wrap_mode)
     density_1plus = 1.0 + stitched["density"]
     x_HII_field = 1.0 - stitched["xH_box"]
     v_los_Mpc_s = stitched["velocity_z"] / MPC_CM
     x_e_interp = 1.0 - stitched["xH_box"].mean(axis=(0, 1))
     pos_axis = stitched["pos_axis"]
+    hist_z, hist_xH = np.asarray(z_arr).copy(), 1.0 - x_e_interp   # stitched history
 
     tau0 = analytic_tau_below(z_arr.min())
     z_mid, ds, dtau, tau = compute_tau(x_e_interp, z_arr, pos_axis, tau0=tau0)
@@ -164,7 +170,7 @@ def run_one_multiple(zs_m, cfg, chi_eff, z_lo, z_hi):
 
     ell_dec, Dl_total, Dl_diag, Dl_off = decompose_p_total_diag_off(
         theta_grouped, BOX_LEN, chi_eff)
-    return ell_dec, Dl_total, Dl_diag, Dl_off, theta_grouped.shape[-1]
+    return ell_dec, Dl_total, Dl_diag, Dl_off, theta_grouped.shape[-1], hist_z, hist_xH
 
 
 def main():
@@ -176,6 +182,11 @@ def main():
     p.add_argument("--hii-dim", type=int, default=None)
     p.add_argument("--box-len", type=float, default=None)
     p.add_argument("--outdir", default=None)
+    p.add_argument("--wrap-cycle-seed", type=int, default=None,
+                   help="use per-wrap-cycle rotation (stitch_from_coeval.py) instead of "
+                        "the no-rotation default; output goes to a separate "
+                        "28_stitched_dz_wrapcycle<seed> directory")
+    p.add_argument("--wrap-mode", choices=["wrap", "grid-wrap"], default="wrap")
     args = p.parse_args()
 
     with open(args.config) as f:
@@ -206,15 +217,16 @@ def main():
     subsets = build_dz_subsets(z_snapshots, dz_multiples)
     s23 = _load_s23()
 
-    curves, rows = {}, []
+    curves, rows, hist = {}, [], {}
     for m in sorted(dz_multiples):
         zs_m = subsets[m]
         log.info("dz_x%d: stitching from %d snapshots...", m, len(zs_m))
-        ell_dec, Dl_total, Dl_diag, Dl_off, n_groups = run_one_multiple(
-            zs_m, cfg, chi_eff, z_lo, z_hi)
+        ell_dec, Dl_total, Dl_diag, Dl_off, n_groups, hist_z, hist_xH = run_one_multiple(
+            zs_m, cfg, chi_eff, z_lo, z_hi,
+            wrap_cycle_seed=args.wrap_cycle_seed, wrap_mode=args.wrap_mode)
 
         log.info("  computing fresh direct curve for this same snapshot subset...")
-        ell_dir_m, Dl_dir_m = fresh_direct_curve(s23, cfg, zs_m)
+        ell_dir_m, Dl_dir_m, snap_z_m, snap_xH_m = fresh_direct_curve(s23, cfg, zs_m)
         d3000_direct_m = float(np.interp(3000, ell_dir_m, Dl_dir_m))
 
         d3000_total = float(np.interp(3000, ell_dec, Dl_total))
@@ -223,6 +235,7 @@ def main():
         frac_diff = abs(d3000_diag - d3000_direct_m) / d3000_direct_m
         curves[m] = (ell_dec.copy(), Dl_total.copy(), Dl_diag.copy(), Dl_off.copy(),
                     ell_dir_m.copy(), Dl_dir_m.copy())
+        hist[m] = (hist_z, hist_xH, snap_z_m, snap_xH_m)
         rows.append(dict(m=m, n_snap=len(zs_m), n_groups=n_groups,
                          d3000_total=d3000_total, d3000_diag=d3000_diag,
                          d3000_off=d3000_off, d3000_direct_m=d3000_direct_m,
@@ -249,12 +262,16 @@ def main():
              "to stitching; even the trusted Limber calculation is sensitive to "
              "how many z-slices it's given.", direct_m_spread * 100)
 
-    outdir = args.outdir or os.path.join(cfg["data"]["plot_dir"].rstrip("/"),
-                                         "28_stitched_dz")
+    default_sub = "28_stitched_dz" if args.wrap_cycle_seed is None else \
+        f"28_stitched_dz_wrapcycle{args.wrap_cycle_seed}" + ("" if args.wrap_mode == "wrap" else "_gridwrap")
+    outdir = args.outdir or os.path.join(cfg["data"]["plot_dir"].rstrip("/"), default_sub)
     os.makedirs(outdir, exist_ok=True)
 
     save_dict = dict(dz_multiples=sorted(dz_multiples), d3000_direct_fixed=d3000_direct,
-                     chi_eff=chi_eff, z_lo=z_lo, z_hi=z_hi)
+                     chi_eff=chi_eff, z_lo=z_lo, z_hi=z_hi,
+                     wrap_cycle_seed=(-1 if args.wrap_cycle_seed is None else args.wrap_cycle_seed),
+                     wrap_mode=args.wrap_mode,
+                     BOX_LEN=cfg["21cmfast"]["BOX_LEN"], HII_DIM=cfg["21cmfast"]["HII_DIM_coeval"])
     for m in dz_multiples:
         ell_dec, Dl_total, Dl_diag, Dl_off, ell_dir_m, Dl_dir_m = curves[m]
         save_dict[f"ell_dz_x{m}"] = ell_dec
@@ -263,6 +280,11 @@ def main():
         save_dict[f"Dl_off_dz_x{m}"] = Dl_off
         save_dict[f"ell_direct_dz_x{m}"] = ell_dir_m
         save_dict[f"Dl_direct_dz_x{m}"] = Dl_dir_m
+        hz, hx, sz, sx = hist[m]
+        save_dict[f"hist_z_dz_x{m}"] = hz          # stitched lightcone, full LOS grid
+        save_dict[f"hist_xH_dz_x{m}"] = hx
+        save_dict[f"snap_z_dz_x{m}"] = sz          # coeval snapshots used for this subset
+        save_dict[f"snap_xH_dz_x{m}"] = sx
     np.savez(f"{outdir}/stitched_dz_convergence.npz", **save_dict)
     log.info("Saved -> %s/stitched_dz_convergence.npz", outdir)
 

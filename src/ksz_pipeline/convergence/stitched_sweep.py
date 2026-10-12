@@ -44,7 +44,8 @@ from ..utils.constants import MPC_CM, ne0_cgs
 
 def run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max, cache_dir,
                     tag, angle_deg=0.0, N_THREADS=None, random_seed=None,
-                    z_lo=None, z_hi=None, chi_Mpc=None):
+                    z_lo=None, z_hi=None, chi_Mpc=None,
+                    wrap_cycle_seed=None, wrap_mode='wrap'):
     """
     Stitch a lightcone and compute D_ell for one (BOX_LEN, HII_DIM)
     configuration. No pickle-level caching of its own here (unlike
@@ -78,10 +79,21 @@ def run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max, cache_dir,
                         ksz_map_to_Dl in place of its hardcoded
                         chi_Mpc=7800 default. Default None -- old
                         behavior (7800 default).
+    wrap_cycle_seed   : int or None. ADDED 12Oct2026. None (default) is the
+                        old behavior exactly (single fixed angle_deg,
+                        nearest-index rotation). An int selects the
+                        per-wrap-cycle rotation of stitch_from_coeval.py
+                        (angle_deg is then ignored).
+    wrap_mode         : 'wrap' (default) or 'grid-wrap', see
+                        stitch_from_coeval.get_slab_bilinear. Only used with
+                        wrap_cycle_seed.
 
     Returns
     -------
-    dict: ell, Dl, D3000, ksz_map_rms
+    dict: ell, Dl, D3000, ksz_map_rms, n_lc_pix, cell_size, and (added
+    12Oct2026, additive) z_arr_full / xH_mean_z: the stitched lightcone's
+    transverse-mean neutral fraction on its FULL line-of-sight grid
+    (before any window truncation), for reionisation-history panels.
     """
     from ..ksz.stitch_from_coeval import stitch_lightcone_from_coeval
 
@@ -93,6 +105,7 @@ def run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max, cache_dir,
         HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
         cache_dir=cache_dir, angle_deg=angle_deg,
         N_THREADS=N_THREADS, random_seed=random_seed,
+        wrap_cycle_seed=wrap_cycle_seed, wrap_mode=wrap_mode,
     )
 
     density_1plus = 1.0 + stitched['density']
@@ -101,6 +114,7 @@ def run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max, cache_dir,
 
     x_e_interp = 1.0 - stitched['xH_box'].mean(axis=(0, 1))
     pos_axis   = stitched['pos_axis']
+    xH_mean_z  = 1.0 - x_e_interp          # kept for the history panel
 
     tau0 = analytic_tau_below(z_arr.min())
     z_mid, ds, dtau, tau = compute_tau(x_e_interp, z_arr, pos_axis, tau0=tau0)
@@ -138,12 +152,14 @@ def run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max, cache_dir,
 
     return dict(ell=ell, Dl=Dl, Dl_err=Dl_err, D3000=D3000,
                 ksz_map_rms=float(np.sqrt(np.mean(ksz_map**2))),
-                n_lc_pix=len(z_arr_used), cell_size=cell_size)
+                n_lc_pix=len(z_arr_used), cell_size=cell_size,
+                z_arr_full=np.asarray(z_arr), xH_mean_z=xH_mean_z)
 
 
 def run_sweep(param_list, z_snapshots, z_min, z_max, cache_dir,
               angle_deg=0.0, N_THREADS=None, random_seed=None,
-              z_lo=None, z_hi=None, chi_Mpc=None):
+              z_lo=None, z_hi=None, chi_Mpc=None,
+              wrap_cycle_seed=None, wrap_mode='wrap'):
     """
     Run run_one_config for each configuration in param_list.
 
@@ -174,7 +190,9 @@ def run_sweep(param_list, z_snapshots, z_min, z_max, cache_dir,
         out[tag] = run_one_config(BOX_LEN, HII_DIM, z_snapshots, z_min, z_max,
                                    cache_dir, tag, angle_deg=angle_deg,
                                    N_THREADS=N_THREADS, random_seed=random_seed,
-                                   z_lo=z_lo, z_hi=z_hi, chi_Mpc=chi_Mpc)
+                                   z_lo=z_lo, z_hi=z_hi, chi_Mpc=chi_Mpc,
+                                   wrap_cycle_seed=wrap_cycle_seed,
+                                   wrap_mode=wrap_mode)
         print(f"  n_lc_pix={out[tag]['n_lc_pix']}  "
               f"D_3000={out[tag]['D3000']:.4g} uK^2", flush=True)
     return out

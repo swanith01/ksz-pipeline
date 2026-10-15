@@ -37,6 +37,9 @@ The conversion factor for P_qq is unit-tested against a Python port of
 AMBER's own estimator (tests/test_amber_adapter.py).
 """
 import numpy as np
+import os
+import pickle
+import time
 
 from ..coeval.momentum import qperp_power_from_momentum
 from . import io
@@ -98,51 +101,71 @@ def velocity_from_momentum(rho, mom_cms, rho_floor=1e-6):
 
 
 def results_qperp_from_amber(field_files, zre, N, L_box_mpc_h, h,
-                             nbins=None, verbose=True):
+                             nbins=None, verbose=True, checkpoint=None):
     """
     Build compute_cell's input dict directly from AMBER snapshots.
 
-    Parameters
-    ----------
-    field_files : list of fields_*.dat paths (io.list_field_files)
-    zre         : (N,N,N) reionization-redshift field (io.read_zre)
-    N           : mesh cells per side
-    L_box_mpc_h : AMBER box length [Mpc/h]
-    h           : Hubble parameter used in the AMBER run
-
-    Returns
-    -------
-    dict keyed by z (float, from inside each file -- the filename tag
-    is rounded to 2 decimals), each entry with 'k', 'Pqperp', 'Pstd',
-    'xH_mean' exactly as compute_cell expects, plus 'xH_mass' and
-    'rho_mean' for diagnostics.
+    checkpoint: optional path to a pickle file. Shells already recorded
+    there are skipped WITHOUT reading their raw field file again; each
+    newly computed shell is written to it immediately (atomic replace),
+    so a walltime/OOM kill only loses the shell in flight, not everything
+    before it.
     """
     L_mpc = L_box_mpc_h / h
-    out = {}
+
+    state = {'shells': {}, 'files_done': set()}
+    if checkpoint and os.path.exists(checkpoint):
+        with open(checkpoint, 'rb') as fh:
+            state = pickle.load(fh)
+        if verbose:
+            print(f"  resumed {len(state['shells'])} shell(s) from {checkpoint}",
+                  flush=True)
+    out = dict(state['shells'])
+
+    t0 = time.time()
     for f in field_files:
+        if f in state['files_done']:
+            if verbose:
+                print(f"  {f}  (cached, skipping)", flush=True)
+            continue
+
         z, rho, mom = io.read_fields(f, N)
         rho_mean = float(rho.mean())
-        # rho2 is 1+delta normalized to mean 1 by construction; a large
-        # departure means the layout/field assumption is wrong -- fail.
         if abs(rho_mean - 1.0) > 1e-2:
             raise RuntimeError(
-                f"{f}: <rho2> = {rho_mean:.4f}, expected ~1. Field is not "
-                f"1+delta as assumed -- check the dump patch / layout.")
+                f"mean(rho) = {rho_mean:.4f}, expected ~1.0, for {f}; "
+                f"check normalization")
         s = snapshot(zre, rho, mom, z, h)
+        # Memory fix: rho/mom and the raw 'delta' field aren't needed past
+        # this point -- free before the FFT-heavy qperp_power_from_momentum
+        # call. No numeric change.
+        del rho, mom, s['delta']
         k, P, Ps = qperp_power_from_momentum(
             s['p_cms'][0], s['p_cms'][1], s['p_cms'][2], s['xH'],
             L_mpc, nbins=nbins)
         if z in out:
             raise RuntimeError(f"duplicate snapshot z={z} ({f})")
+
+        xH_mean, xH_mass = s['xH_mean'], s['xH_mass']
         out[z] = {'k': k, 'Pqperp': P, 'Pstd': Ps,
-                  'xH_mean': s['xH_mean'], 'xH_mass': s['xH_mass'],
+                  'xH_mean': xH_mean, 'xH_mass': xH_mass,
                   'rho_mean': rho_mean}
+        del s
+
+        state['shells'] = out
+        state['files_done'].add(f)
+        if checkpoint:
+            tmp = checkpoint + '.tmp'
+            with open(tmp, 'wb') as fh:
+                pickle.dump(state, fh)
+            os.replace(tmp, checkpoint)
+
         if verbose:
-            print(f"  z={z:7.4f}  xH_vol={s['xH_mean']:.5f}  "
-                  f"xH_mass={s['xH_mass']:.5f}  <rho>={rho_mean:.5f}")
+            print(f"  z={z:7.4f}  xH_vol={xH_mean:.5f}  "
+                  f"xH_mass={xH_mass:.5f}  <rho>={rho_mean:.5f}  "
+                  f"({time.time()-t0:.0f}s elapsed)", flush=True)
+
     return out
-
-
 def amber_pqq_to_repo(k_h, P_qq, h, XH=0.76, YHe=0.24):
     """
     AMBER power_<zstr>.txt P_qq -> this repo's P_qperp convention.

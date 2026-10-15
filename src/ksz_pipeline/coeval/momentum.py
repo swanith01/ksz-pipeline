@@ -112,30 +112,41 @@ def _qperp_power_from_q(qx, qy, qz, BOX_LEN, nbins=None):
     d = L / N
     V = L**3
 
-    # k grid [Mpc^-1]
-    kfreq      = np.fft.fftfreq(N, d=d) * 2.0 * np.pi
-    kx, ky, kz = np.meshgrid(kfreq, kfreq, kfreq, indexing='ij')
-    k2         = kx**2 + ky**2 + kz**2
-    k_mag      = np.sqrt(k2)
-    k2_safe    = np.where(k2 == 0.0, np.inf, k2)
+    # Memory fix: 1D broadcastable k-arrays instead of full (N,N,N) float64
+    # kx,ky,kz from meshgrid (was an extra ~87GB resident for N=1536, for
+    # nothing -- broadcasting gives numerically IDENTICAL values, same
+    # float64 precision throughout, so this does not change
+    # test_qperp_refactor_bit_identical's result).
+    kfreq = np.fft.fftfreq(N, d=d) * 2.0 * np.pi
+    kx1 = kfreq.reshape(N, 1, 1)
+    ky1 = kfreq.reshape(1, N, 1)
+    kz1 = kfreq.reshape(1, 1, N)
+    k2      = kx1**2 + ky1**2 + kz1**2
+    k_mag   = np.sqrt(k2)
+    k2_safe = np.where(k2 == 0.0, np.inf, k2)
+    del k2
 
-    # FFT: continuous-FT convention Q(k) = sum q(x) exp(-ik.x) dx^3
-    Qx = np.fft.fftn(qx) * d**3
-    Qy = np.fft.fftn(qy) * d**3
-    Qz = np.fft.fftn(qz) * d**3
+    # Memory fix: two passes over the 3 components instead of holding
+    # Qx,Qy,Qz and Qx_perp,Qy_perp,Qz_perp all at once (was ~350GB+
+    # transient at N=1536). Costs one extra FFT pass; math is identical.
+    kdotQ_k2 = np.zeros((N, N, N), dtype=np.complex128)
+    for q, k1 in ((qx, kx1), (qy, ky1), (qz, kz1)):
+        Q = np.fft.fftn(q) * d**3
+        kdotQ_k2 += Q * k1
+        del Q
+    kdotQ_k2 /= k2_safe
 
-    # Transverse projection Q_perp = Q - k_hat(Q.k_hat)
-    kdotQ_k2 = (Qx * kx + Qy * ky + Qz * kz) / k2_safe
-    Qx_perp  = Qx - kdotQ_k2 * kx
-    Qy_perp  = Qy - kdotQ_k2 * ky
-    Qz_perp  = Qz - kdotQ_k2 * kz
+    Qperp2 = np.zeros((N, N, N), dtype=np.float64)
+    for q, k1 in ((qx, kx1), (qy, ky1), (qz, kz1)):
+        Q = np.fft.fftn(q) * d**3
+        Qp = Q - kdotQ_k2 * k1
+        Qperp2 += np.abs(Qp)**2
+        del Q, Qp
+    del kdotQ_k2
 
-    # P_{q_perp}(k) = <|Q_perp|^2> / V / 2
-    Qperp2 = (np.abs(Qx_perp)**2
-              + np.abs(Qy_perp)**2
-              + np.abs(Qz_perp)**2)
     p_flat = (Qperp2 / V / 2.0).ravel()
     k_flat = k_mag.ravel()
+    del Qperp2
 
     # Radial log-spaced binning
     if nbins is None:

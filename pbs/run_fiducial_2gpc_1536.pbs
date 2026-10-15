@@ -36,11 +36,16 @@
 #PBS -j oe
 #PBS -o fiducial_2gpc_1536.log
 
-set -uo pipefail
+set -x
 cd "$PBS_O_WORKDIR" || exit 1
 
-source /apps/intel/oneapi/setvars.sh >/dev/null 2>&1
-export LD_LIBRARY_PATH="$HOME/Healpix_3.83/lib:/apps/anaconda3/lib:$LD_LIBRARY_PATH"
+# setvars.sh is not 'set -u'-safe -- source before enabling strict mode
+# (same fix already applied in external/amber_patch/build_amber.sh)
+source /apps/intel/oneapi/setvars.sh
+source "$HOME/miniconda3/etc/profile.d/conda.sh"
+conda activate p21c_v41
+set -uo pipefail
+export LD_LIBRARY_PATH="$HOME/Healpix_3.83/lib:/apps/anaconda3/lib:${LD_LIBRARY_PATH:-}"
 export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
 
 AMBER_X="$HOME/amber/src/amber.x"     # EDIT if built elsewhere

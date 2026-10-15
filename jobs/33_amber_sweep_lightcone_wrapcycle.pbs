@@ -1,0 +1,32 @@
+#!/bin/bash
+#PBS -N amber_sweep_lc_wrapcycle
+#PBS -l nodes=1:ppn=16
+#PBS -l walltime=01:00:00
+#PBS -j oe
+#PBS -o /user1/swanith/ksz-pipeline-amber/jobs/amber_sweep_lc_wrapcycle.log
+
+set -e
+cd /user1/swanith/ksz-pipeline-amber
+source /apps/intel/oneapi/setvars.sh >/dev/null
+source /user1/swanith/miniconda3/etc/profile.d/conda.sh
+conda activate p21c_v3
+export LD_LIBRARY_PATH="$HOME/Healpix_3.83/lib:/apps/anaconda3/lib:$LD_LIBRARY_PATH"
+
+# Pure post-processing of the already-validated runs/sweep_chen2023 point
+# directories (scripts/40/30 already ran and validated all 16 points) --
+# no amber.x invocation here, just re-stitching each point's lightcone
+# with wrap-cycle rotation on (default seed 123, see
+# docs/HANDOFF_wrap_cycle.md) and computing D_ell via
+# compute_ksz_map/ksz_map_to_Dl.
+PYTHONPATH=src python scripts/33_amber_sweep_lightcone_wrapcycle.py \
+    --out-root runs/sweep_chen2023 --wrap-cycle-seed 123
+
+# Regenerates the three Chen2023 Fig.10 plots with the new dotted
+# stitched-lightcone+wrap-cycle curve added (cheap -- no-op if the step
+# above failed to produce sweep_results_lightcone.npz, which would make
+# this exit non-zero too thanks to set -e... actually scripts/41 just
+# plots without the 3rd curve if the file's missing, so this would still
+# "succeed" but silently without the new curve; check the log for the
+# "found .../sweep_results_lightcone.npz" line to confirm it was picked
+# up).
+PYTHONPATH=src python scripts/41_plot_amber_sweep.py --run runs/sweep_chen2023

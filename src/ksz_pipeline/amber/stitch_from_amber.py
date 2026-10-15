@@ -42,6 +42,9 @@ from ..ksz.stitch_from_coeval import (
     build_los_z_grid, comoving_distance_mpc, comoving_pixel,
     rotated_indices, get_slab, stitch_field,
 )
+from ..ksz.lightcone_integral import compute_ksz_map, ksz_map_to_Dl
+from ..ksz.optical_depth import compute_patchy_mask
+from ..utils.constants import MPC_CM
 from . import io
 from .adapter import KMS_TO_CMS
 
@@ -132,3 +135,107 @@ def stitch_lightcone_from_amber(field_files, zre, z_arr, N, L_box_mpc_h, h,
     pos_axis = np.array([comoving_distance_mpc(z) for z in z_arr])
     return dict(density=density, xH_box=xH_box, velocity_z=velocity_z,
                 z_arr=np.asarray(z_arr), pos_axis=pos_axis)
+
+
+def amber_lightcone_to_ksz_Dl(lc, tau_table, box_len_mpc, ne0,
+                              xe_min=1.0e-4, xe_max=1.0 - 1.0e-4,
+                              n_kbins=35):
+    """
+    Wire a stitch_lightcone_from_amber() output through
+    ksz.lightcone_integral.compute_ksz_map / ksz_map_to_Dl -- the
+    AMBER-sourced sibling of ksz.stitch_from_coeval's 21cmFAST path
+    (scripts/03_stitched_lightcone_crosscheck.py), with the three
+    run-specific pieces resolved AMBER's own way rather than borrowed
+    from that path or from a previous run:
+
+      ne0       : NOT defaulted here -- pass this run's own
+                  meta['ne0_cgs'] (amber/scripts/make_amber_input.py),
+                  the SAME value scripts/30's gate2 already passes to
+                  compute_cell for this run, built from its actual
+                  XH/YHe/Ob. A cosmology override paired with the
+                  wrong ne0 is exactly the silent-mismatch bug class
+                  gate2 already had to catch once; ne0_cgs() (Planck18)
+                  is the correct fallback ONLY for runs predating that
+                  field, which always used Planck18.
+
+      visibility_3D : exp(-tau(z)) built from tau_table, AMBER's own
+                  output/cmb/tau.txt (z, x_e, tau(0->z) columns) --
+                  interpolated onto the FULL red_axis, unclipped. AMBER
+                  integrates tau against the history it actually
+                  simulated, so unlike the 21cmFAST path (whose
+                  compute_tau()/analytic_tau_below() patch a gap
+                  21cmFAST itself doesn't track) there is nothing to
+                  patch here.
+
+      chi_Mpc   : ALWAYS recomputed from this lightcone's own signal
+                  (RMS-weighted mean comoving distance over the patchy
+                  window -- same recipe script 03 uses for the 21cmFAST
+                  path), never passed in and never defaulted. Neither
+                  ksz_map_to_Dl's stale chi_Mpc=7800 default nor the
+                  21cmFAST fiducial run's own chi_eff~8504 Mpc (left
+                  untouched precisely because it is that ONE run's
+                  number) apply to an AMBER run with a different window
+                  -- and the AMBER sweep moves z_mid 7->9, so a fixed
+                  chi_Mpc would silently stop matching its own map as
+                  the window shifts.
+
+    Parameters
+    ----------
+    lc          : dict from stitch_lightcone_from_amber -- density (RAW
+                  delta), xH_box, velocity_z (cm/s), z_arr, pos_axis
+    tau_table   : ndarray (M, >=3), AMBER's output/cmb/tau.txt loaded
+                  with np.loadtxt(path, skiprows=1); column 0 = z,
+                  column 2 = tau(0->z). Must bracket lc['z_arr'].
+    box_len_mpc : float, AMBER box length in Mpc (L_box_mpc_h / h) --
+                  NOT Mpc/h, same convention ksz_map_to_Dl expects.
+    ne0         : float [cm^-3], see above -- required, no default.
+    xe_min, xe_max : patchy-regime bounds passed to
+                  optical_depth.compute_patchy_mask (defaults match
+                  that function's own: 99.99%-to-0.01%-neutral).
+    n_kbins     : passed through to ksz_map_to_Dl.
+
+    Returns
+    -------
+    dict: ell, Dl, Dl_err, chi_eff, ksz_map, z_window (float (z_lo, z_hi)
+    tuple, or None if no slice falls inside the patchy regime -- this
+    is a sign the LOS grid doesn't bracket this run's reionization
+    history, not a value to silently fall back from).
+    """
+    density_1plus = 1.0 + lc['density']
+    x_HII_field   = 1.0 - lc['xH_box']
+    v_los_Mpc_s   = lc['velocity_z'] / MPC_CM
+    z_arr, pos_axis = lc['z_arr'], lc['pos_axis']
+
+    tau_table = np.asarray(tau_table, dtype=float)
+    if not (tau_table[:, 0].min() <= z_arr.min() and
+            z_arr.max() <= tau_table[:, 0].max()):
+        raise ValueError(
+            f"LOS grid z=[{z_arr.min():.2f},{z_arr.max():.2f}] falls "
+            f"outside tau_table's range "
+            f"[{tau_table[:,0].min():.2f},{tau_table[:,0].max():.2f}]")
+    tau_at_lc = np.interp(z_arr, tau_table[:, 0], tau_table[:, 2])
+    visibility_3D = np.exp(-tau_at_lc)[None, None, :]
+
+    x_e_interp = x_HII_field.mean(axis=(0, 1))
+    patchy_mask, patchy_mask_3D = compute_patchy_mask(x_e_interp, xe_min, xe_max)
+    z_patchy = z_arr[patchy_mask.astype(bool)]
+    z_window = (float(z_patchy.min()), float(z_patchy.max())) \
+        if z_patchy.size > 0 else None
+
+    ksz_map = compute_ksz_map(density_1plus, x_HII_field, v_los_Mpc_s,
+                              z_arr, np.diff(pos_axis), visibility_3D,
+                              ne0=ne0, patchy_mask_3D=patchy_mask_3D)
+
+    # chi_eff: same weighting compute_ksz_map itself integrates (signal
+    # x visibility x patchy mask), collapsed per-slice to RMS (not mean
+    # -- kSZ is a fluctuation field around zero) and used to weight
+    # pos_axis. Computed fresh every call -- see docstring above.
+    integrand = density_1plus * x_HII_field * v_los_Mpc_s * visibility_3D
+    integrand = integrand * patchy_mask_3D
+    slice_rms = np.sqrt(np.mean(integrand**2, axis=(0, 1)))
+    chi_eff = float(np.sum(slice_rms * pos_axis) / np.sum(slice_rms))
+
+    ell, Dl, Dl_err = ksz_map_to_Dl(ksz_map, box_len_mpc, chi_Mpc=chi_eff,
+                                    n_kbins=n_kbins)
+    return dict(ell=ell, Dl=Dl, Dl_err=Dl_err, chi_eff=chi_eff,
+                ksz_map=ksz_map, z_window=z_window)

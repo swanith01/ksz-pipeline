@@ -272,6 +272,65 @@ def test_tau_below_amber_reads_history(tmp_path):
         adapter.tau_below_amber(str(tmp_path), 12.0)
 
 
+# 9. stitch_from_amber -> compute_ksz_map/ksz_map_to_Dl wiring --------------
+def test_amber_lightcone_to_ksz_Dl_runs_end_to_end(tmp_path):
+    """amber_lightcone_to_ksz_Dl must consume stitch_lightcone_from_amber's
+    output and AMBER's own tau.txt directly -- the density_1plus/
+    x_HII_field/v_los_Mpc_s/MPC_CM conventions are this function's job,
+    not the caller's, unlike script 03's inline 21cmFAST version."""
+    from ksz_pipeline.amber import stitch_from_amber as sfa
+    N = 10
+    rng = np.random.default_rng(21)
+    zre = (6 + 3 * rng.random((N, N, N))).astype(np.float32)
+    for z in [5.0, 6.0, 7.0, 8.0, 9.0, 10.0]:
+        rho = (1 + 0.1 * rng.standard_normal((N, N, N))).astype(np.float32)
+        rho /= rho.mean()
+        mom = (50 * rng.standard_normal((3, N, N, N))).astype(np.float32)
+        _write_fields(tmp_path / f'fields_z={z:05.2f}.dat', z, rho, mom)
+    files = io.list_field_files(str(tmp_path))
+    L_h, h = 80.0, 0.6766
+    z_arr = sfa.build_los_z_grid(5.3, 9.7, cell_size=L_h / h / N)
+    lc = sfa.stitch_lightcone_from_amber(files, zre, z_arr, N, L_h, h)
+
+    # Synthetic tau.txt-equivalent (z, x_e, tau(0->z)), monotonically
+    # increasing with z, bracketing z_arr with margin either side.
+    tau_z = np.linspace(0.0, 15.0, 200)
+    tau_table = np.stack([tau_z, np.zeros_like(tau_z),
+                          0.06 * (1 - np.exp(-tau_z / 4.0))], axis=1)
+
+    result = sfa.amber_lightcone_to_ksz_Dl(lc, tau_table, L_h / h,
+                                           ne0=2.064357e-07)
+
+    assert np.all(np.isfinite(result['Dl'])) and np.all(result['Dl'] >= 0)
+    assert result['ksz_map'].shape == (N, N)
+    # chi_eff is a weighted average of pos_axis -- must land inside its
+    # own lightcone's comoving-distance range, not just "some positive
+    # number"; outside it would mean the weighting itself is broken.
+    assert lc['pos_axis'].min() <= result['chi_eff'] <= lc['pos_axis'].max()
+    assert result['z_window'] is not None
+    z_lo, z_hi = result['z_window']
+    assert z_arr.min() <= z_lo < z_hi <= z_arr.max()
+
+
+def test_amber_lightcone_to_ksz_Dl_rejects_narrow_tau_table(tmp_path):
+    """A tau_table that doesn't bracket the LOS grid must raise, not
+    silently feed np.interp's flat-extrapolated tails into visibility_3D."""
+    from ksz_pipeline.amber import stitch_from_amber as sfa
+    N = 8
+    zre = np.full((N, N, N), 7.0, np.float32)
+    for z in [6.0, 7.0, 8.0]:
+        _write_fields(tmp_path / f'fields_z={z:05.2f}.dat', z,
+                      np.ones((N, N, N), np.float32),
+                      np.zeros((3, N, N, N), np.float32))
+    files = io.list_field_files(str(tmp_path))
+    L_h, h = 64.0, 0.7
+    z_arr = sfa.build_los_z_grid(6.2, 7.8, cell_size=L_h / h / N)
+    lc = sfa.stitch_lightcone_from_amber(files, zre, z_arr, N, L_h, h)
+    tau_table = np.array([[6.5, 0.0, 0.03], [7.0, 0.0, 0.04]])  # too narrow
+    with pytest.raises(ValueError, match='outside tau_table'):
+        sfa.amber_lightcone_to_ksz_Dl(lc, tau_table, L_h / h, ne0=2.06e-7)
+
+
 # 8. stitch_from_amber: ionization direction, both variants ----------------
 def test_exact_matches_ionized_mask(tmp_path):
     """Regression test for a real bug: the 'exact' branch first written

@@ -1,0 +1,15 @@
+#!/bin/bash
+#PBS -N amber_map_test
+#PBS -l nodes=1:ppn=16
+#PBS -l walltime=03:00:00
+#PBS -j oe
+#PBS -o /user1/swanith/ksz-pipeline-amber/jobs/amber_q01_map_test.log
+
+set -e
+cd /user1/swanith/ksz-pipeline-amber/runs/amber_q01_map_test
+mkdir -p output/{cosmo,reion,grf,lpt,esf,mesh,cmb}
+source /apps/intel/oneapi/setvars.sh >/dev/null
+export OMP_NUM_THREADS=16
+export LD_LIBRARY_PATH="$HOME/Healpix_3.83/lib:/apps/anaconda3/lib:$LD_LIBRARY_PATH"
+
+~/amber/src/amber.x < input/input.txt > output/log.txt

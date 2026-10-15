@@ -1,0 +1,13 @@
+#!/bin/bash
+#PBS -N validate_fiducial
+#PBS -l select=1:ncpus=1:mem=450gb
+#PBS -l walltime=72:00:00
+#PBS -j oe
+#PBS -o validate_fiducial_2gpc_1536.log
+
+cd "$PBS_O_WORKDIR" || exit 1
+source "$HOME/miniconda3/etc/profile.d/conda.sh"
+conda activate p21c_v3
+export PYTHONPATH="$PWD/src:$PYTHONPATH"
+
+/usr/bin/time -v python -u scripts/30_amber_validation_gate.py --run runs/sweep_2gpc_1536/zmid8_dz4_az3_mh8_mfp3

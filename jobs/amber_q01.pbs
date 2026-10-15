@@ -1,0 +1,25 @@
+#!/bin/bash
+#PBS -N amber_q01
+#PBS -l nodes=1:ppn=16
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -o /user1/swanith/ksz-pipeline-amber/jobs/amber_q01.log
+
+set -e
+CONDA_ENV=p21c_v3
+
+cd /user1/swanith/ksz-pipeline-amber
+source /apps/intel/oneapi/setvars.sh >/dev/null
+source /user1/swanith/miniconda3/etc/profile.d/conda.sh
+conda activate "$CONDA_ENV"
+export OMP_NUM_THREADS=16
+
+bash external/amber_patch/build_amber.sh
+
+python scripts/make_amber_input.py --out runs/amber_q01 --L 256 --N 256 \
+    --zmid 8 --zdel 4 --zasy 3 --ncore 16
+cd runs/amber_q01 && mkdir -p output/{cosmo,reion,grf,lpt,esf,mesh,cmb}
+~/amber/src/amber.x < input/input.txt > output/log.txt
+cd /user1/swanith/ksz-pipeline-amber
+
+python scripts/30_amber_validation_gate.py --run runs/amber_q01

@@ -405,3 +405,80 @@ def test_stitch_density_convention_raw_delta(tmp_path):
     lc = sfa.stitch_lightcone_from_amber(files, zre, z_arr, N, 64.0, 0.7)
     assert abs(lc['density'].mean()) < 0.2       # raw delta, centered near 0
     assert lc['density'].mean() > -0.9           # NOT (1+delta)-1-1 etc.
+
+
+# 10. wrap-cycle: breaks the periodic-box repeat, opt-in only -------------
+def test_wrap_cycle_breaks_periodic_repeat(tmp_path):
+    """Without wrap_cycle_seed, a LOS position that wraps back to a
+    y_cell visited by an earlier (different-cycle) position reads a
+    bit-identical slab -- the exact bug wrap-cycle exists to fix (see
+    stitch_from_coeval's module docstring: a single fixed angle_deg does
+    NOT break a box's own periodic repeat). With wrap_cycle_seed set,
+    different cycles get different rotations, so the repeat must break."""
+    from ksz_pipeline.amber import stitch_from_amber as sfa
+    from ksz_pipeline.ksz.stitch_from_coeval import (
+        comoving_pixel, wrap_cycle_index)
+
+    N = 6
+    rng = np.random.default_rng(31)
+    zre = (6 + 2 * rng.random((N, N, N))).astype(np.float32)
+    # IDENTICAL field content at both snapshot redshifts: isolates the
+    # box-periodicity+rotation effect from snapshot-interpolation-in-z,
+    # which otherwise also makes same-y_cell slabs differ slightly
+    # (different cycles land at different target z) and would confound
+    # this test with an unrelated effect.
+    rho = (1 + 0.3 * rng.standard_normal((N, N, N))).astype(np.float32)
+    rho /= rho.mean()
+    mom = (80 * rng.standard_normal((3, N, N, N))).astype(np.float32)
+    for z in [7.0, 9.0]:
+        _write_fields(tmp_path / f'fields_z={z:05.2f}.dat', z, rho, mom)
+    files = io.list_field_files(str(tmp_path))
+
+    L_h, h = 32.0, 0.7                      # box_len_mpc = 32/0.7 = 45.7 Mpc
+    cell_size = (L_h / h) / N
+    z_arr = sfa.build_los_z_grid(5.0, 15.0, cell_size=cell_size)
+    z0 = z_arr.min()
+
+    # Find two LOS indices that share a y_cell but fall in different
+    # wrap cycles -- the exact situation a fixed angle gets wrong.
+    by_ycell = {}
+    for n, z in enumerate(z_arr):
+        y = comoving_pixel(z, z0, cell_size, N)
+        c = wrap_cycle_index(z, z0, cell_size, N)
+        by_ycell.setdefault(y, {}).setdefault(c, n)
+    n0 = n1 = None
+    for y, cycles in by_ycell.items():
+        if len(cycles) >= 2:
+            n0, n1 = list(cycles.values())[:2]
+            break
+    assert n0 is not None, "test setup failed to find a repeated y_cell across cycles"
+
+    lc_fixed = sfa.stitch_lightcone_from_amber(files, zre, z_arr, N, L_h, h)
+    lc_wrap = sfa.stitch_lightcone_from_amber(files, zre, z_arr, N, L_h, h,
+                                              wrap_cycle_seed=42)
+
+    # OLD behavior: bit-identical repeat across cycles at the same y_cell.
+    np.testing.assert_array_equal(lc_fixed['density'][:, :, n0],
+                                  lc_fixed['density'][:, :, n1])
+    # NEW behavior: wrap-cycle rotation must break that repeat.
+    assert not np.array_equal(lc_wrap['density'][:, :, n0],
+                              lc_wrap['density'][:, :, n1])
+
+
+def test_wrap_cycle_rejected_with_exact_ionization(tmp_path):
+    """interp=False still uses the old single-angle nearest-neighbor path
+    for zre -- wrap_cycle_seed must fail loudly there, not silently
+    return a periodically-aliased lightcone that looks fine but isn't."""
+    from ksz_pipeline.amber import stitch_from_amber as sfa
+    N = 6
+    zre = np.full((N, N, N), 7.0, np.float32)
+    for z in [6.0, 7.0, 8.0]:
+        _write_fields(tmp_path / f'fields_z={z:05.2f}.dat', z,
+                      np.ones((N, N, N), np.float32),
+                      np.zeros((3, N, N, N), np.float32))
+    files = io.list_field_files(str(tmp_path))
+    L_h, h = 32.0, 0.7
+    z_arr = sfa.build_los_z_grid(6.2, 7.8, cell_size=(L_h / h) / N)
+    with pytest.raises(NotImplementedError):
+        sfa.stitch_lightcone_from_amber(files, zre, z_arr, N, L_h, h,
+                                        interp=False, wrap_cycle_seed=7)

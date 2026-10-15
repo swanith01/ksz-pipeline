@@ -27,11 +27,16 @@ fiducial's chi_eff~8504).
 Usage
 -----
     python scripts/32_amber_stitched_lightcone_crosscheck.py --run runs/amber_q01
+    # with wrap-cycle rotation (see docs/HANDOFF_wrap_cycle.md):
+    python scripts/32_amber_stitched_lightcone_crosscheck.py --run runs/amber_q01 \
+        --wrap-cycle-seed 123
 
-Produces <run>/ksz_Dl_stitched_amber.npz: ell, Dl, Dl_err, chi_eff,
-z_window. If <run>/amber_gate.npz exists (scripts/30 already ran), also
-prints the D_3000 ratio against compute_cell and AMBER's own window sum,
-for a three-way check.
+Produces <run>/ksz_Dl_stitched_amber.npz (or, with --wrap-cycle-seed,
+<run>/ksz_Dl_stitched_amber_wrapcycle<seed>.npz, kept separate so re-runs
+with and without wrap-cycle never overwrite each other): ell, Dl, Dl_err,
+chi_eff, z_window. If <run>/amber_gate.npz exists (scripts/30 already
+ran), also prints the D_3000 ratio against compute_cell and AMBER's own
+window sum, for a three-way check.
 """
 import argparse
 import json
@@ -62,6 +67,19 @@ def main():
                          'constant, since different sweep points use '
                          'different czdel/cspacing (e.g. the '
                          'dz=12.8/log-spacing Fig. 10 point).')
+    ap.add_argument('--wrap-cycle-seed', type=int, default=None,
+                    help='Enable wrap-cycle rotation (a fresh '
+                         'deterministic rotation angle each time the LOS '
+                         'wraps back around the periodic box) with this '
+                         'integer seed -- see '
+                         'docs/HANDOFF_wrap_cycle.md and '
+                         'stitch_from_coeval\'s module docstring. Default '
+                         'None preserves the old single-fixed-angle '
+                         'behavior exactly (byte-for-byte), which still '
+                         'reuses the same box slab every time the LOS '
+                         'returns to a given y_cell. Requires interp=True '
+                         '(this script always uses interp=True, so no '
+                         'extra flag is needed for that).')
     a = ap.parse_args()
 
     meta = json.load(open(os.path.join(a.run, 'amber_run.json')))
@@ -77,12 +95,15 @@ def main():
     margin = a.margin if a.margin is not None else 0.5 * np.diff(snap_z).min()
     z_min, z_max = snap_z.min() + margin, snap_z.max() - margin
     z_arr = build_los_z_grid(z_min, z_max, cell_size)
+    wc_note = (f", wrap-cycle seed={a.wrap_cycle_seed}"
+              if a.wrap_cycle_seed is not None else ", no wrap-cycle")
     print(f"run {a.run}: L={L_h} Mpc/h N={N}  stitching {len(field_files)} "
           f"snapshots onto {len(z_arr)} LOS pixels, z={z_min:.2f}-{z_max:.2f} "
-          f"(margin={margin:.3f})")
+          f"(margin={margin:.3f}{wc_note})")
 
     lc = stitch_lightcone_from_amber(field_files, zre, z_arr, N, L_h, h,
-                                     angle_deg=0.0, interp=True)
+                                     angle_deg=0.0, interp=True,
+                                     wrap_cycle_seed=a.wrap_cycle_seed)
     print(f"  [check] mean(1+density)={1.0 + lc['density'].mean():.4f} (want ~1)")
     print(f"  [check] rms(velocity_z)/MPC_CM="
           f"{np.sqrt(np.mean((lc['velocity_z'] / 3.0856775814913673e24)**2)):.4e} "
@@ -106,7 +127,12 @@ def main():
           f"(signal-weighted, this run only)")
     print(f"  ksz_map shape: {result['ksz_map'].shape}")
 
-    out_path = os.path.join(a.run, 'ksz_Dl_stitched_amber.npz')
+    # Suffix the filename when wrap-cycle is on, so a wrap-cycle run never
+    # silently overwrites the plain (default, no-wrap-cycle) result for
+    # the same --run dir -- both can be kept side by side.
+    out_name = ('ksz_Dl_stitched_amber.npz' if a.wrap_cycle_seed is None
+               else f'ksz_Dl_stitched_amber_wrapcycle{a.wrap_cycle_seed}.npz')
+    out_path = os.path.join(a.run, out_name)
     np.savez(out_path, ell=result['ell'], Dl=result['Dl'],
              Dl_err=result['Dl_err'], chi_eff=result['chi_eff'],
              z_window=np.array(result['z_window']

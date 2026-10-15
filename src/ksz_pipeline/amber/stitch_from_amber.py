@@ -66,7 +66,8 @@ def _load_amber_snapshots(field_files, zre):
 
 
 def stitch_lightcone_from_amber(field_files, zre, z_arr, N, L_box_mpc_h, h,
-                                angle_deg=0.0, interp=True):
+                                angle_deg=0.0, interp=True,
+                                wrap_cycle_seed=None, wrap_mode='wrap'):
     """
     Build (density, xH, velocity_z) on the LOS grid z_arr from AMBER
     snapshots, using stitch_from_coeval's exact stitching geometry.
@@ -86,11 +87,34 @@ def stitch_lightcone_from_amber(field_files, zre, z_arr, N, L_box_mpc_h, h,
     h            : Hubble parameter used in the AMBER run
     angle_deg    : transverse rotation, passed through to stitch_field
                    (default 0, matching stitch_from_coeval's own default
-                   and its stated reason: isolate one variable at a time)
+                   and its stated reason: isolate one variable at a time).
+                   Ignored entirely if wrap_cycle_seed is not None (see
+                   stitch_from_coeval.stitch_field).
     interp       : True (default) = x_HI interpolated across snapshots,
                    directly comparable to the 21cmFAST stitched path.
                    False = exact z<zre per LOS pixel, no interpolation.
                    See module docstring -- report both, don't blend.
+    wrap_cycle_seed : int or None, default None. AMBER's own box
+                   (e.g. ~378 Mpc at the Chen2023-sweep L=256 Mpc/h,
+                   h=0.6766) is far shorter than the comoving distance a
+                   full czmin..czmax lightcone needs, so z_arr routinely
+                   wraps the same periodic box many times. A SINGLE fixed
+                   angle_deg does not break that periodic repeat (same
+                   box[ir,jr,y_cell] both times y_cell wraps back) -- see
+                   stitch_from_coeval's module docstring. Passing an int
+                   here uses stitch_field's per-wrap-cycle rotation
+                   instead: one fresh, deterministic rotation per BOX_LEN
+                   of comoving distance, SHARED across density/velocity
+                   (and xH when interp=True) so they stay physically
+                   consistent at every LOS position, exactly as
+                   stitch_lightcone_from_coeval does for the 21cmFAST
+                   path. Default None reproduces the original (pre-wrap-
+                   cycle) behavior exactly -- existing callers are
+                   unaffected.
+    wrap_mode    : 'wrap' (default) or 'grid-wrap', only used when
+                   wrap_cycle_seed is set -- see
+                   stitch_from_coeval.get_slab_bilinear for the period-
+                   (n-1) vs period-n distinction.
 
     Returns
     -------
@@ -99,6 +123,20 @@ def stitch_lightcone_from_amber(field_files, zre, z_arr, N, L_box_mpc_h, h,
     stitch_from_coeval.stitch_lightcone_from_coeval, so compute_ksz_map
     takes either lightcone unchanged.
     """
+    if wrap_cycle_seed is not None and not interp:
+        # The interp=False branch samples zre directly with the OLD
+        # nearest-neighbor rotation path (rotated_indices/get_slab), not
+        # stitch_field -- wiring per-cycle bilinear rotation through it
+        # is unwritten. Fail loudly rather than silently ignore
+        # wrap_cycle_seed and return a periodically-aliased exact
+        # lightcone that looks fine but isn't.
+        raise NotImplementedError(
+            "wrap_cycle_seed is not yet supported with interp=False -- "
+            "the exact (z<zre) branch still uses single-angle nearest-"
+            "neighbor rotation. Use interp=True, or extend the exact "
+            "branch with wrap_cycle_index/cycle_angle/rotated_coords/"
+            "get_slab_bilinear first (see stitch_from_coeval.py).")
+
     L_mpc = L_box_mpc_h / h
     cell_size = L_mpc / N
     z0 = float(np.min(z_arr))
@@ -110,16 +148,17 @@ def stitch_lightcone_from_amber(field_files, zre, z_arr, N, L_box_mpc_h, h,
     vz_boxes    = {z: snaps[z][2] for z in snap_z}
 
     density    = stitch_field(delta_boxes, snap_z, z_arr, z0, cell_size,
-                               N, angle_deg)
+                               N, angle_deg, wrap_cycle_seed, wrap_mode)
     velocity_z = stitch_field(vz_boxes,    snap_z, z_arr, z0, cell_size,
-                               N, angle_deg)
+                               N, angle_deg, wrap_cycle_seed, wrap_mode)
 
     if interp:
         xH_box = stitch_field(xH_boxes, snap_z, z_arr, z0, cell_size,
-                              N, angle_deg)
+                              N, angle_deg, wrap_cycle_seed, wrap_mode)
     else:
         # Exact per-pixel ionization: z_arr[n] < zre at that pixel's
         # rotated transverse position -- no snapshot interpolation.
+        # wrap_cycle_seed is guaranteed None here (checked above).
         ir, jr = rotated_indices(N, angle_deg)
         xH_box = np.empty((N, N, len(z_arr)), dtype=np.float32)
         for n, z in enumerate(z_arr):

@@ -1,0 +1,51 @@
+#!/bin/bash
+#PBS -N amber_regen_verify
+#PBS -l nodes=1:ppn=16
+#PBS -l walltime=01:00:00
+#PBS -j oe
+#PBS -o /user1/swanith/ksz-pipeline-amber/jobs/amber_regen_verify.log
+
+set -e
+cd /user1/swanith/ksz-pipeline-amber
+source /apps/intel/oneapi/setvars.sh >/dev/null
+source /user1/swanith/miniconda3/etc/profile.d/conda.sh
+conda activate p21c_v3
+export LD_LIBRARY_PATH="$HOME/Healpix_3.83/lib:/apps/anaconda3/lib:$LD_LIBRARY_PATH"
+
+# Single-point determinism check before committing to regenerating all 14
+# pruned points: back up the fiducial point's surviving cl_*.txt/tau.txt
+# (these were NOT pruned, only fields_*.dat was), re-run amber.x with its
+# preserved input/input.txt (same seed=1, same params -- see
+# amber_run.json), then diff old vs new. If AMBER is deterministic given
+# the same seeded input, as --seed's design implies, these should match.
+D=runs/sweep_chen2023/zmid8_dz4_az3_mh8_mfp3
+BACKUP=runs/sweep_chen2023/_regen_verify_backup_zmid8_dz4_az3_mh8_mfp3
+
+echo "=== backing up existing (pre-regen) derived outputs ==="
+mkdir -p "$BACKUP"
+cp "$D/output/cmb/cl_ksz.txt" "$D/output/cmb/cl_tau.txt" \
+   "$D/output/cmb/cl_kappa.txt" "$D/output/cmb/tau.txt" "$BACKUP/"
+ls -la "$BACKUP"
+
+echo
+echo "=== re-running amber.x with the preserved input.txt ==="
+cd "$D"
+~/amber/src/amber.x < input/input.txt > output/regen_verify_log.txt 2>&1
+cd /user1/swanith/ksz-pipeline-amber
+tail -20 "$D/output/regen_verify_log.txt"
+
+echo
+echo "=== fields_*.dat regenerated? ==="
+ls "$D/output/cmb/"fields_*.dat | wc -l
+
+echo
+echo "=== diff: old (backed up) vs newly regenerated derived outputs ==="
+for f in cl_ksz.txt cl_tau.txt cl_kappa.txt tau.txt; do
+  echo "--- $f ---"
+  if cmp -s "$BACKUP/$f" "$D/output/cmb/$f"; then
+    echo "IDENTICAL -- deterministic regeneration confirmed"
+  else
+    echo "DIFFERENT -- diff below (first 20 lines):"
+    diff "$BACKUP/$f" "$D/output/cmb/$f" | head -20
+  fi
+done

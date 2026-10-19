@@ -48,6 +48,7 @@ import importlib
 import json
 import os
 import sys
+import time
 
 import numpy as np
 
@@ -129,21 +130,30 @@ def main():
 
     payload = {}
     for name, scen in scenarios.items():
-        print(f"\n=== Scenario '{name}' ({scen['axis_label']}) ===")
+        print(f"\n=== Scenario '{name}' ({scen['axis_label']}) ===", flush=True)
         kept_labels = set(_kept_labels(d40, name))
         kept = []
         for p in scen['points']:
             if p['label'] not in kept_labels:
                 print(f"  [{p['label']}] skipped -- not in {results_npz} "
-                      f"(scripts/40 excluded it, gate failure or never run)")
+                      f"(scripts/40 excluded it, gate failure or never run)",
+                      flush=True)
                 continue
             tag = sweep40.tag_for(p)
             run_dir = sweep40.cfg_dir(a.out_root, tag)
-            print(f"  [{tag}] ", end='')
+            # Printed and flushed BEFORE the (potentially very slow --
+            # wrap-cycle lightcone stitching over thousands of LOS pixels,
+            # not a cheap box-based sum) call, not just after, so a run
+            # that gets killed mid-point (e.g. walltime) still leaves a
+            # log saying which point it was stuck on, instead of nothing.
+            print(f"  [{tag}] starting...", flush=True)
+            t0 = time.time()
             result = _run_one_point(run_dir, a.margin, a.wrap_cycle_seed)
+            dt = time.time() - t0
             i3 = int(np.argmin(np.abs(result['ell'] - 3000)))
-            print(f"D_3000 = {result['Dl'][i3]:.4f} uK^2  "
-                  f"chi_eff = {result['chi_eff']:.1f} Mpc")
+            print(f"  [{tag}] done in {dt:.0f}s -- D_3000 = "
+                  f"{result['Dl'][i3]:.4f} uK^2  chi_eff = "
+                  f"{result['chi_eff']:.1f} Mpc", flush=True)
             kept.append((p, result))
 
         payload[f'{name}_axis'] = scen['axis']

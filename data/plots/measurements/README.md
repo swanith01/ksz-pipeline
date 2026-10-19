@@ -50,15 +50,18 @@ All values are in μK² at ℓ = 3000. 68% intervals unless marked "<" (95% uppe
 
 | Year | Exp. | Value | Paper | Case |
 |---|---|---|---|---|
+| 2012 | SPT | < 5.7 | Reichardt+ 2012 | all kSZ assumed patchy: Z11 patchy-only template, free tSZ–CIB correlation, no homogeneous part subtracted (Table 3) |
 | 2012 | SPT | < 4.9 | Zahn+ 2012 | free tSZ–CIB correlation (< 2.1 with ξ = 0) |
+| 2013 | ACT | < 7.1 | Sievers+ 2013 | total < 8.6 minus assumed homogeneous 1.5 ± 0.5 (Shaw+ 2012 scaling); uncertainty not propagated |
 | 2015 | SPT | < 4.4 | George+ 2015 | spectra only, homogeneous kSZ subtracted |
 | 2021 | SPT | < 2.5 | Reichardt+ 2021 | with tSZ-bispectrum prior (68%: 1.1 +1.0/−0.7) |
 | 2022 | Independent | < 1.58 | Gorce+ 2022 | free cosmology |
 
+Note: Reichardt+ 2012 assumes all kSZ is patchy, so its limit is looser by construction than the homogeneous-subtracted limits (Zahn+ 2012 uses the same data).
+
 ### Not plotted
 
 - **Planck 2014, 5.3 (+2.8/−1.9)** carried over from the old notebook. No source found. Planck Int. XXIV shows A_kSZ only in contour plots; Planck 2013 XVI's foreground table was not checked. Same central value as Addison+ 2013, so possibly a copy error. Off unless `--include-unverified`.
-- **Sievers+ 2013 patchy < 7.1** (old notebook): that paper quotes no patchy-kSZ limit. Removed.
 - **SPT-3G D1 patchy kSZ:** shown only as a posterior plot (their Fig. 8), no number quoted.
 - **Raghunathan+ 2024** (kSZ trispectrum) constrains Δz⁵⁰_re < 4.5 directly, not a kSZ power.
 

@@ -89,6 +89,7 @@ class Point:
     variant: bool = False     # alternative model choice of the same analysis
     verified: bool = True     # value confirmed against the paper
     dx: float = 0.0           # horizontal offset for same-year points
+    label_pos: tuple | None = None  # (dx, dy, rotation, ha) override for the annotation
 
 
 # Total kSZ power D_3000^kSZ (homogeneous + patchy)
@@ -152,7 +153,15 @@ TOTAL_KSZ: list[Point] = [
 # Patchy (reionization) kSZ power D_3000^pkSZ
 PATCHY_KSZ: list[Point] = [
     Point(2012, "SPT", 4.9, upper=True, label="Zahn+", ref="arXiv:1111.6386",
-          note="free tSZ-CIB correlation; < 2.1 with xi = 0"),
+          note="free tSZ-CIB correlation; < 2.1 with xi = 0", dx=0.15),
+    Point(2012, "SPT", 5.7, upper=True, label="Reichardt+\n(all kSZ patchy)",
+          ref="arXiv:1111.0932",
+          note="Table 3: Z11 patchy-only template, free tSZ-CIB correlation; "
+               "all kSZ assumed patchy, no homogeneous part subtracted", dx=-0.15,
+          label_pos=(-0.1, 0.15, 0, "right")),
+    Point(2013, "ACT", 7.1, upper=True, label="Sievers+", ref="arXiv:1301.0824",
+          note="total < 8.6 minus assumed homogeneous 1.5 (Shaw+12 scaling), "
+               "homogeneous uncertainty not propagated"),
     Point(2015, "SPT", 4.4, upper=True, label="George+", ref="arXiv:1408.3161",
           note="spectra only, after subtracting homogeneous kSZ"),
     Point(2021, "SPT", 2.5, upper=True, label="Reichardt+", ref="arXiv:2002.06197",
@@ -184,7 +193,8 @@ def _draw_point(ax, p: Point, annotate: bool) -> None:
                    lw=2.0 if p.variant else 1.2, alpha=alpha, zorder=6)
     if annotate and p.label and not p.variant:
         y = p.value + (0.35 if p.upper else (p.hi or 0) + 0.25)
-        ax.annotate(p.label, xy=(x + 0.08, y), rotation=45, ha="left",
+        ldx, ldy, rot, ha = p.label_pos or (0.08, 0.0, 45, "left")
+        ax.annotate(p.label, xy=(x + ldx, y + ldy), rotation=rot, ha=ha,
                     va="bottom", fontsize=18, color=color)
 
 
@@ -252,7 +262,7 @@ def make_patchy(outdir: Path) -> None:
         PATCHY_KSZ,
         ylabel=r"$D^{\,\mathrm{pkSZ}}_{\ell=3000}\ \ (\mu\mathrm{K}^2)$",
         outfile=outdir / "patchy_kSZ_history.pdf",
-        ylim=(-0.4, 7.5), xlim=(2011.2, 2026.9), annotate=True, ystep=2,
+        ylim=(-0.4, 9.0), xlim=(2009.8, 2026.9), annotate=True, ystep=2,
     )
 
 

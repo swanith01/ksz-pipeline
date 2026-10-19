@@ -106,15 +106,25 @@ TOTAL_KSZ: list[Point] = [
           note="CSF+patchy template, free l-independent tSZ-CIB correlation "
                "(< 2.7 with xi=0, < 4.1 with rising xi_l)", dx=0.12),
     Point(2013, "ACT", 8.6, upper=True, label="Sievers+", ref="arXiv:1301.0824",
-          note="ACT+WMAP7, LCDM, 95% CL", dx=-0.12),
+          note="ACT+WMAP7, LCDM, 95% CL", dx=-0.2),
     Point(2013, "ACT", 5.0, upper=True, label="Dunkley+ (ACT+SPT)",
           ref="arXiv:1301.0776",
           note="ACT+SPT, 0 < xi < 0.2; ACT alone < 8.6, broader 0 < xi < 0.5 gives < 6.9",
-          dx=0.12),
+          dx=0.2),
+    Point(2013, "Independent", 5.3, lo=2.4, hi=2.2, label="Addison+",
+          ref="arXiv:1210.6697 (MNRAS 436, 1896)",
+          note="SPT+ACT+Herschel-SPIRE+Planck; value as quoted by Crawford+14 Sec. 6.3.4",
+          dx=0.0),
+    Point(2014, "SPT", 2.9, lo=1.6, hi=1.6, label="Crawford+",
+          ref="arXiv:1303.3535 (ApJ 784, 143)",
+          note="R12 spectra + tSZ-bispectrum prior, free tSZ-CIB corr., A_kSZ>0 prior; "
+               "< 5.6 (95%); 2.6 +/- 1.8 without the positivity prior"),
     # Could not confirm the number in the Planck 2013 papers (table not
     # retrievable). Off by default; enable with --include-unverified.
     Point(2014, "Planck", 5.3, lo=1.9, hi=2.8, label="Planck 2013",
-          ref="arXiv:1303.5076 (?)", note="UNVERIFIED value from older notebook",
+          ref="arXiv:1303.5076 (?)",
+          note="UNVERIFIED; not in Planck Int. XXIV (only 2D contours). Possibly a "
+               "mix-up with Addison+13 (also 5.3)",
           verified=False),
     Point(2015, "SPT", 2.9, lo=1.3, hi=1.3, label="George+", ref="arXiv:1408.3161",
           note="with tSZ-bispectrum prior; spectra-only 95% limit < 5.4"),

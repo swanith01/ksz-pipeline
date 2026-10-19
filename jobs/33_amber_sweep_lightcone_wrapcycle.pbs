@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N amber_sweep_lc_wrapcycle
 #PBS -l nodes=1:ppn=16
-#PBS -l walltime=01:00:00
+#PBS -l walltime=08:00:00
 #PBS -j oe
 #PBS -o /user1/swanith/ksz-pipeline-amber/jobs/amber_sweep_lc_wrapcycle.log
 
@@ -13,20 +13,31 @@ conda activate p21c_v3
 export LD_LIBRARY_PATH="$HOME/Healpix_3.83/lib:/apps/anaconda3/lib:$LD_LIBRARY_PATH"
 
 # Pure post-processing of the already-validated runs/sweep_chen2023 point
-# directories (scripts/40/30 already ran and validated all 16 points) --
-# no amber.x invocation here, just re-stitching each point's lightcone
-# with wrap-cycle rotation on (default seed 123, see
+# directories -- no amber.x invocation, just re-stitching each point's
+# lightcone with wrap-cycle rotation on (default seed 123, see
 # docs/HANDOFF_wrap_cycle.md) and computing D_ell via
 # compute_ksz_map/ksz_map_to_Dl.
-PYTHONPATH=src python scripts/33_amber_sweep_lightcone_wrapcycle.py \
+#
+# walltime bumped 1h -> 8h after the first real attempt (1742857.swarm)
+# was killed at the 1h limit with a COMPLETELY EMPTY log: wrap-cycle
+# lightcone stitching spans the full comoving-distance range (z~4.5-18.5
+# for this box), thousands of LOS pixels per point x 14 points, each
+# needing a fresh bilinear interpolation per snapshot -- genuinely more
+# expensive than scripts/40's box-based Limber sum, which never builds a
+# lightcone at all. (For reference, an existing 21cmFAST wrap-cycle job
+# on this account, ksz_wc123, runs with a 72h budget -- this is a known
+# expensive operation in this codebase, not a fluke.)
+#
+# -u = unbuffered stdout, so the log updates live instead of waiting for
+# the process to exit; combined with scripts/33's now-flushed per-point
+# "starting.../done in Ns" prints (see its latest commit), the log will
+# show real progress even if this run also hits its limit.
+PYTHONPATH=src python -u scripts/33_amber_sweep_lightcone_wrapcycle.py \
     --out-root runs/sweep_chen2023 --wrap-cycle-seed 123
 
 # Regenerates the three Chen2023 Fig.10 plots with the new dotted
 # stitched-lightcone+wrap-cycle curve added (cheap -- no-op if the step
-# above failed to produce sweep_results_lightcone.npz, which would make
-# this exit non-zero too thanks to set -e... actually scripts/41 just
-# plots without the 3rd curve if the file's missing, so this would still
-# "succeed" but silently without the new curve; check the log for the
-# "found .../sweep_results_lightcone.npz" line to confirm it was picked
-# up).
-PYTHONPATH=src python scripts/41_plot_amber_sweep.py --run runs/sweep_chen2023
+# above failed to produce sweep_results_lightcone.npz; check the log for
+# the "found .../sweep_results_lightcone.npz" line to confirm it was
+# picked up).
+PYTHONPATH=src python -u scripts/41_plot_amber_sweep.py --run runs/sweep_chen2023

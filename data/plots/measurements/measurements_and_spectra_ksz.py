@@ -11,6 +11,9 @@ Figures produced (all written to ``--outdir``, default ``./figures``):
              kSZ_SED.pdf                 kSZ as a Doppler-shifted blackbody
   total      total_kSZ_history.pdf       total kSZ power at l=3000 vs. publication year
   patchy     patchy_kSZ_history.pdf      patchy (reionization) kSZ at l=3000 vs. year
+  duration   reionization_duration_history.pdf
+                                         Delta z limits (kSZ power, kSZ trispectrum)
+                                         + higher-order amplitudes vs. fiducial
   tsz        tSZ_measurements.pdf        tSZ power at l=3000 vs. year (ported unchanged)
 
 Usage
@@ -90,6 +93,8 @@ class Point:
     verified: bool = True     # value confirmed against the paper
     dx: float = 0.0           # horizontal offset for same-year points
     label_pos: tuple | None = None  # (dx, dy, rotation, ha) override for the annotation
+    method: str = "power"     # "power" (kSZ 2-pt), "trispectrum" (kSZ 4-pt), "screening"
+    defn: str = ""            # duration definition, e.g. "25-75%" (duration plot only)
 
 
 # Total kSZ power D_3000^kSZ (homogeneous + patchy)
@@ -169,6 +174,57 @@ PATCHY_KSZ: list[Point] = [
                "68%: 1.1 +1.0 -0.7"),
     Point(2022, "Independent", 1.58, upper=True, label="Gorce+",
           ref="arXiv:2202.08698", note="free cosmology"),
+]
+
+
+# Duration of reionization, Delta z (95% CL upper limits).
+# Papers define Delta z between different ionized fractions; ``defn`` records it:
+#   20-99%  Zahn+12 simulations        25-75%  Battaglia+13 / AMBER Delta z_50
+#   10-99%  Planck tanh-like model
+DURATION: list[Point] = [
+    Point(2012, "SPT", 7.9, upper=True, label="Zahn+", ref="arXiv:1111.6386",
+          defn="20-99%",
+          note="free l-independent tSZ-CIB correlation (matches patchy < 4.9); "
+               "< 4.4 with xi = 0, < 6.2 with rising xi_l"),
+    # Sievers+13 (arXiv:1301.0824) derive z-bar / Delta z from a_kSZ,patchy < 7.1
+    # via Battaglia+12 -- value still to be copied from the paper.
+    Point(2015, "SPT", 5.4, upper=True, label="George+", ref="arXiv:1408.3161",
+          defn="20-99%", note="homogeneous kSZ accounted for; Zahn+12 simulations"),
+    Point(2016, "Planck", 2.8, upper=True, label="Planck Int. XLVII",
+          ref="arXiv:1605.03507", defn="10-99%",
+          note="redshift-symmetric model, lollipop+PlanckTT+VHL kSZ, z_end > 6 prior "
+               "(< 4.8 with uniform prior; < 4.6 CMB-only)"),
+    Point(2021, "SPT", 4.1, upper=True, label="Reichardt+", ref="arXiv:2002.06197",
+          defn="25-75%",
+          note="tSZ-bispectrum prior, best-estimate homogeneous kSZ; 68%: 1.1 +1.6 -0.7; "
+               "no prior < 5.4 (6.9 / 4.3 low / high homogeneous)"),
+    Point(2022, "Independent", 4.3, upper=True, label="Gorce+", ref="arXiv:2202.08698",
+          defn="25-75%", note="SPT kSZ + Planck; < 4.8 at 99% CL"),
+    Point(2024, "SPT", 4.5, upper=True, label="Raghunathan+", ref="arXiv:2403.02337",
+          defn="25-75%", method="trispectrum",
+          note="SPTpol+SPT-3G+Herschel-SPIRE kSZ 4-pt, Gunn-Peterson prior "
+               "(< 5 if reionization may end at z < 5)"),
+    Point(2025, "ACT", 4.4, upper=True, label="Beringue+", ref="arXiv:2506.06274",
+          defn="25-75%",
+          note="ACT DR6, B13 relation, z_mid = 8, no low-z kSZ (conservative); "
+               "< 2.5 / < 0.7 with BAHAMAS 8.0 / 7.6 low-z kSZ; AMBER Delta z_90 < 7.7"),
+    Point(2026, "SPT", 4.2, upper=True, label="Chaubal+", ref="arXiv:2601.20551",
+          defn="25-75%",
+          note="SPT-3G D1 fiducial (free CIB + l^alpha G15 SZ), h-kSZ 1.76 subtracted; "
+               "median 0.8 +1.5 -0.6; AMBER Delta z_90 < 7.0"),
+]
+
+# Higher-order statistics with no Delta z quoted: amplitude relative to the
+# paper's own fiducial reionization model (=1 means that model).
+AMPLITUDE: list[Point] = [
+    Point(2024, "ACT", 77, lo=33, hi=33, label="MacCrann+ (kSZ 4-pt)\nvs. Alvarez16, $z_{\\rm mid}=10$",
+          ref="arXiv:2405.01188 (MNRAS 532, 4247)", method="trispectrum",
+          note="lensing-hardened A_A16 relative to Alvarez (2016), z_mid = 10; "
+               "foreground-dominated, interpreted as an upper limit"),
+    Point(2026, "ACT", 450, upper=True, label="Kramer+ (screening)\nvs. AMBER, $z_{\\rm mid}=8$, $\\Delta z=4$",
+          ref="arXiv:2608.27458", method="screening",
+          note="A_tau = 180 +/- 157, < 450 (95%) relative to AMBER z_mid = 8, Delta z = 4; "
+               "< 370 for l_max = 2000"),
 ]
 
 
@@ -266,15 +322,108 @@ def make_patchy(outdir: Path) -> None:
     )
 
 
+DEFN_LABEL = {"20-99%": "20\u201399%", "10-99%": "10\u201399%", "25-75%": "25\u201375%"}
+
+
+def _duration_marker(ax, x, y, color, method, s=260, zorder=5):
+    if method == "power":
+        ax.scatter(x, y, marker="v", s=s, color=color, edgecolor="black", lw=1.2,
+                   zorder=zorder)
+    else:  # trispectrum / screening: open symbol
+        ax.scatter(x, y, marker="v", s=s, facecolor="white", edgecolor=color, lw=2.5,
+                   zorder=zorder)
+
+
+def make_duration(outdir: Path) -> None:
+    with mpl.rc_context(STYLE):
+        fig, (ax, bx) = plt.subplots(
+            2, 1, figsize=(20, 15), sharex=True,
+            gridspec_kw={"height_ratios": [2.2, 1], "hspace": 0.05})
+
+        # --- top: Delta z upper limits
+        for p in DURATION:
+            c = COLORS[p.exp]
+            x = p.year + p.dx
+            ls = "-" if p.method == "power" else (0, (2, 1.5))
+            ax.vlines(x, 0, p.value, color=c, alpha=0.35, lw=4, linestyles=ls, zorder=2)
+            _duration_marker(ax, x, p.value, c, p.method)
+            ldx, ldy, rot, ha = p.label_pos or (0.08, 0.25, 45, "left")
+            ax.annotate(f"{p.label}\n[{DEFN_LABEL.get(p.defn, p.defn)}]",
+                        xy=(x + ldx, p.value + ldy), rotation=rot, ha=ha,
+                        va="bottom", fontsize=17, color=c, linespacing=1.1)
+        ax.set_ylabel(r"$\Delta z_{\rm re}$  (95% upper limit)", fontsize=44)
+        ax.set_ylim(0, 11)
+        ax.set_yticks(np.arange(0, 11, 2))
+
+        handles = []
+        for exp in ["ACT", "SPT", "Planck", "Independent"]:
+            if any(p.exp == exp for p in DURATION + AMPLITUDE):
+                handles.append(ax.scatter([], [], marker="v", s=260, color=COLORS[exp],
+                                          edgecolor="black", lw=1.2, label=exp))
+        handles.append(ax.scatter([], [], marker="v", s=260, color="0.6",
+                                  edgecolor="black", lw=1.2, label="kSZ power spectrum"))
+        handles.append(ax.scatter([], [], marker="v", s=260, facecolor="white",
+                                  edgecolor="0.4", lw=2.5,
+                                  label="kSZ trispectrum / screening"))
+        ax.legend(handles=handles, loc="upper right", ncol=2, handlelength=1.2,
+                  borderpad=0.6, columnspacing=1.0)
+        ax.text(0.012, 0.97, "[ ] = ionized fractions bracketing $\\Delta z$",
+                transform=ax.transAxes, ha="left", va="top", fontsize=18, color="0.3")
+
+        # --- bottom: amplitude relative to fiducial reionization model
+        bx.set_yscale("log")
+        bx.axhline(1, color="0.4", lw=1.5, ls="--", zorder=1)
+        bx.text(2010.0, 1.25, "fiducial reionization model", fontsize=17, color="0.35",
+                va="bottom")
+        for p in AMPLITUDE:
+            c = COLORS[p.exp]
+            x = p.year + p.dx
+            if p.upper:
+                bx.vlines(x, 0.3, p.value, color=c, alpha=0.35, lw=4,
+                          linestyles=(0, (2, 1.5)), zorder=2)
+                _duration_marker(bx, x, p.value, c, p.method)
+                ytxt = p.value * 0.55
+            else:
+                bx.errorbar(x, p.value, yerr=[[p.lo], [p.hi]], fmt="none", ecolor=c,
+                            elinewidth=2.5, capsize=6, capthick=2, zorder=4)
+                bx.scatter(x, p.value, marker="o", s=260, facecolor="white",
+                           edgecolor=c, lw=2.5, zorder=6)
+                ytxt = p.value * 0.7
+            bx.annotate(p.label, xy=(x - 0.15, ytxt), ha="right", va="bottom", fontsize=17,
+                        color=c, linespacing=1.1)
+        bx.set_ylim(0.3, 3000)
+        bx.set_yticks([1, 10, 100, 1000])
+        bx.set_yticklabels(["1", "10", "100", "1000"])
+        bx.set_ylabel("Amplitude /\nfiducial", fontsize=36, linespacing=1.0)
+
+        bx.set_xlabel("Year of publication", fontsize=58)
+        bx.set_xlim(2009.8, 2027.2)
+        bx.set_xticks(np.arange(2010, 2028, 2))
+        for a in (ax, bx):
+            a.tick_params(labelsize=36)
+        out = outdir / "reionization_duration_history.pdf"
+        fig.savefig(out, dpi=200)
+        fig.savefig(out.with_suffix(".png"), dpi=200)
+        plt.close(fig)
+        print(f"Saved: {out}")
+
+
 def print_tables() -> None:
-    for name, pts in (("TOTAL kSZ", TOTAL_KSZ), ("PATCHY kSZ", PATCHY_KSZ)):
+    for name, pts in (("TOTAL kSZ", TOTAL_KSZ), ("PATCHY kSZ", PATCHY_KSZ),
+                      ("DURATION (Delta z)", DURATION),
+                      ("HIGHER-ORDER AMPLITUDE / fiducial", AMPLITUDE)):
         print(f"\n{name}")
         for p in pts:
             val = (f"< {p.value}" if p.upper
                    else f"{p.value} +{p.hi} -{p.lo}")
             flag = "" if p.verified else "  [UNVERIFIED]"
             alt = " (alt. model)" if p.variant else ""
-            print(f"  {p.year}  {p.exp:<11} {val:<18} {p.label}{alt}  "
+            if p.defn:
+                alt += f" [{p.defn}]"
+            if p.method != "power":
+                alt += f" ({p.method})"
+            lbl = p.label.split("\n")[0]
+            print(f"  {p.year}  {p.exp:<11} {val:<18} {lbl}{alt}  "
                   f"{p.ref}  -- {p.note}{flag}")
 
 
@@ -406,7 +555,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("figures", nargs="*", metavar="FIGURE",
-                    help="any of: sed total patchy tsz (default: all)")
+                    help="any of: sed total patchy duration tsz (default: all)")
     ap.add_argument("--outdir", default="figures")
     ap.add_argument("--labels", action="store_true",
                     help="annotate every point in the total-kSZ plot with its author")
@@ -419,7 +568,7 @@ def main() -> None:
         print_tables()
         return
 
-    allowed = {"sed", "total", "patchy", "tsz"}
+    allowed = {"sed", "total", "patchy", "duration", "tsz"}
     args.figures = args.figures or sorted(allowed)
     bad = set(args.figures) - allowed
     if bad:
@@ -433,6 +582,8 @@ def main() -> None:
         make_total(outdir, args.labels, args.include_unverified)
     if "patchy" in args.figures:
         make_patchy(outdir)
+    if "duration" in args.figures:
+        make_duration(outdir)
     if "tsz" in args.figures:
         make_tsz(outdir)
 

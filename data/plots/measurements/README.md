@@ -1,12 +1,13 @@
 # kSZ measurement history
 
-Plots of published kinematic Sunyaev–Zel'dovich (kSZ) power at ℓ = 3000 against year of publication, plus the SZ spectral-response figures from the original notebook.
+Plots of published kinematic Sunyaev–Zel'dovich (kSZ) power at ℓ = 3000 and the reionization-duration limits derived from it, against year of publication, plus the SZ spectral-response figures from the original notebook.
 
 | File | What it is |
 |---|---|
 | `measurements_and_spectra_ksz.py` | Script that makes all figures and holds the data table |
 | `total_kSZ_history.pdf` | Total kSZ power, D₃₀₀₀ᵏˢᶻ (homogeneous + patchy) |
 | `patchy_kSZ_history.pdf` | Patchy (reionization) kSZ power, D₃₀₀₀ᵖᵏˢᶻ |
+| `reionization_duration_history.pdf` | Top: Δz_re limits (kSZ power and trispectrum). Bottom: kSZ-trispectrum and patchy-screening amplitudes relative to a fiducial reionization model |
 
 ## Running
 
@@ -18,11 +19,11 @@ python3 measurements_and_spectra_ksz.py --list          # print the data table
 python3 measurements_and_spectra_ksz.py total --include-unverified
 ```
 
-Other figure names: `sed` (SZ spectral responses, kSZ SED) and `tsz` (tSZ history; data not re-checked).
+Other figure names: `duration` (reionization-duration figure), `sed` (SZ spectral responses, kSZ SED) and `tsz` (tSZ history; data not re-checked).
 
 ## Data plotted
 
-All values are in μK² at ℓ = 3000. 68% intervals unless marked "<" (95% upper limit). Values were checked against the papers in October 2026. When a paper gives several numbers, the **Case** column says which one is plotted.
+kSZ powers are in μK² at ℓ = 3000. 68% intervals unless marked "<" (95% upper limit). Values were checked against the papers in October 2026. When a paper gives several numbers, the **Case** column says which one is plotted.
 
 ### Total kSZ
 
@@ -59,11 +60,40 @@ All values are in μK² at ℓ = 3000. 68% intervals unless marked "<" (95% uppe
 
 Note: Reichardt+ 2012 assumes all kSZ is patchy, so its limit is looser by construction than the homogeneous-subtracted limits (Zahn+ 2012 uses the same data).
 
+### Duration of reionization (top panel)
+
+All are 95% upper limits. **Papers define Δz between different ionized fractions**, shown in brackets on the plot, so limits with different brackets are not directly comparable: a 20–99% or 10–99% duration is longer than a 25–75% one for the same history.
+
+| Year | Exp. | Δz_re | Definition | Paper | Method / case |
+|---|---|---|---|---|---|
+| 2012 | SPT | < 7.9 | 20–99% | Zahn+ 2012 | kSZ power, free ℓ-independent tSZ–CIB correlation (same case as patchy < 4.9); < 4.4 with ξ = 0, < 6.2 with rising ξ_ℓ |
+| 2015 | SPT | < 5.4 | 20–99% | George+ 2015 | kSZ power, homogeneous kSZ accounted for |
+| 2016 | Planck | < 2.8 | 10–99% | Planck Int. XLVII | τ (low-ℓ) + ACT/SPT kSZ, redshift-symmetric model, z_end > 6 prior; < 4.8 uniform prior |
+| 2021 | SPT | < 4.1 | 25–75% | Reichardt+ 2021 | kSZ power + tSZ-bispectrum prior; 68%: 1.1 (+1.6/−0.7); < 5.4 without prior |
+| 2022 | Independent | < 4.3 | 25–75% | Gorce+ 2022 | SPT kSZ + Planck (< 4.8 at 99%) |
+| 2024 | SPT | < 4.5 | 25–75% | Raghunathan+ 2024 | **kSZ trispectrum** (SPTpol + SPT-3G + Herschel-SPIRE), Gunn–Peterson prior |
+| 2025 | ACT | < 4.4 | 25–75% | Beringue+ 2025 | kSZ power, ACT DR6, z_mid = 8, no low-z kSZ (conservative); < 2.5 or < 0.7 with low-z kSZ; AMBER Δz₉₀ < 7.7 |
+| 2026 | SPT | < 4.2 | 25–75% | Chaubal+ 2026 | kSZ power, SPT-3G D1 fiducial, 1.76 μK² homogeneous subtracted; median 0.8 (+1.5/−0.6); AMBER Δz₉₀ < 7.0 |
+
+**Missing: Sievers+ 2013.** The paper turns its patchy limit (< 7.1) into a z̄–Δz constraint using Battaglia+ 2012, but I could not retrieve that section, so no number is plotted yet. There is a placeholder comment in `DURATION` in the script.
+
+### Higher-order statistics with no Δz (bottom panel)
+
+These do not quote a duration, so the plot shows their amplitude relative to the paper's own fiducial reionization model (1 = that model). The two fiducials differ.
+
+| Year | Exp. | Amplitude | Paper | Probe / fiducial |
+|---|---|---|---|---|
+| 2024 | ACT | 77 ± 33 | MacCrann+ 2024 | kSZ trispectrum, ACT DR6 + Planck; relative to Alvarez (2016), z_mid = 10. Lensing-hardened value; foreground-dominated, so read as an upper limit (≈ 50× recent simulations). No Δz constraint. |
+| 2026 | ACT | < 450 (A_τ = 180 ± 157) | Kramer+ 2026 | Anisotropic (patchy) screening, ACT DR6; relative to AMBER z_mid = 8, Δz = 4. < 370 with ℓ_max = 2000. CIB contamination is the limiting systematic. |
+
 ### Not plotted
 
 - **Planck 2014, 5.3 (+2.8/−1.9)** carried over from the old notebook. No source found. Planck Int. XXIV shows A_kSZ only in contour plots; Planck 2013 XVI's foreground table was not checked. Same central value as Addison+ 2013, so possibly a copy error. Off unless `--include-unverified`.
 - **SPT-3G D1 patchy kSZ:** shown only as a posterior plot (their Fig. 8), no number quoted.
-- **Raghunathan+ 2024** (kSZ trispectrum) constrains Δz⁵⁰_re < 4.5 directly, not a kSZ power.
+- **Raghunathan+ 2024** (kSZ trispectrum) is on the duration plot only; it constrains Δz⁵⁰_re < 4.5 directly, not a kSZ power.
+- **Reichardt+ 2012** gives no Δz; the reionization interpretation is in the companion Zahn+ 2012.
+- **Coulton+ 2024** (ACT patchy screening × unWISE) probes gas around low-redshift galaxies, not reionization. No detection; ⟨τ⟩ < 0.033 arcmin² (blue) and < 0.057 arcmin² (green) in a 6′ disk.
+- **Earlier screening/τ-fluctuation limits:** Gluscevic+ 2013 (WMAP-7, several orders of magnitude above models) and Namikawa 2018 (Planck 2015 temperature trispectrum, rules out bubble size R ≳ 10 Mpc at x_e ≈ 0.5). Neither is expressed as an amplitude relative to a fiducial model, so not plotted.
 
 ## References
 
@@ -84,11 +114,17 @@ Note: Reichardt+ 2012 assumes all kSZ is patchy, so its limit is looser by const
 13. **Gorce+ 2022** — A. Gorce, M. Douspis & L. Salvati, *Retrieving cosmological information from small-scale CMB foregrounds. II. The kinetic Sunyaev–Zel'dovich effect*, A&A 662, A122 (2022). [arXiv:2202.08698](https://arxiv.org/abs/2202.08698)
 14. **Beringue+ 2025** — B. Beringue et al., *The Atacama Cosmology Telescope: DR6 Power Spectrum Foreground Model and Validation*, JCAP 2025, 082. [arXiv:2506.06274](https://arxiv.org/abs/2506.06274)
 15. **Chaubal+ 2026** — P. Chaubal, N. Huang, C. L. Reichardt et al., *SPT-3G D1: A Measurement of Secondary Cosmic Microwave Background Anisotropy Power*, submitted to JCAP. [arXiv:2601.20551](https://arxiv.org/abs/2601.20551)
+16. **Raghunathan+ 2024** — S. Raghunathan et al., *First Constraints on the Epoch of Reionization Using the Non-Gaussianity of the Kinematic Sunyaev-Zel'dovich Effect from the South Pole Telescope and Herschel-SPIRE Observations*, PRL 133, 121004 (2024). [arXiv:2403.02337](https://arxiv.org/abs/2403.02337)
+17. **MacCrann+ 2024** — N. MacCrann et al., *The Atacama Cosmology Telescope: Reionization kSZ trispectrum methodology and limits*, MNRAS 532, 4247 (2024). [arXiv:2405.01188](https://arxiv.org/abs/2405.01188)
+18. **Kramer+ 2026** — D. M. Kramer et al., *The Atacama Cosmology Telescope: Constraints on the anisotropic screening and birefringence effects with DR6*, preprint (2026). [arXiv:2608.27458](https://arxiv.org/abs/2608.27458)
 
 ### Cited in notes or checked
 
-16. **Louis+ 2025** — T. Louis et al., *The Atacama Cosmology Telescope: DR6 power spectra, likelihoods and ΛCDM parameters*, JCAP 2025, 062. [arXiv:2503.14452](https://arxiv.org/abs/2503.14452)
-17. **Calabrese+ 2014** — E. Calabrese et al., *Precision epoch of reionization studies with next-generation CMB experiments*, JCAP 08 (2014) 010. [arXiv:1406.4794](https://arxiv.org/abs/1406.4794). Forecast paper, no measurement. Source of the homogeneous-kSZ scaling 1.65 (σ₈/0.8)^4.46 μK² used by SPT-3G D1.
-18. **Planck Int. XXIV** — Planck Collaboration, *Planck intermediate results. XXIV. Constraints on variation of fundamental constants*, A&A 580, A22 (2015). A_kSZ appears only in contour plots; no value quoted.
-19. **Planck 2013 XVI** — Planck Collaboration, *Planck 2013 results. XVI. Cosmological parameters*, A&A 571, A16 (2014). [arXiv:1303.5076](https://arxiv.org/abs/1303.5076). Possible source of the unverified Planck 2014 point; not yet checked.
-20. **Raghunathan+ 2024** — S. Raghunathan et al., *First Constraints on the Epoch of Reionization Using the Non-Gaussianity of the Kinematic Sunyaev-Zel'dovich Effect from the South Pole Telescope and Herschel-SPIRE Observations*, PRL 133, 121004 (2024). [arXiv:2403.02337](https://arxiv.org/abs/2403.02337)
+19. **Louis+ 2025** — T. Louis et al., *The Atacama Cosmology Telescope: DR6 power spectra, likelihoods and ΛCDM parameters*, JCAP 2025, 062. [arXiv:2503.14452](https://arxiv.org/abs/2503.14452)
+20. **Calabrese+ 2014** — E. Calabrese et al., *Precision epoch of reionization studies with next-generation CMB experiments*, JCAP 08 (2014) 010. [arXiv:1406.4794](https://arxiv.org/abs/1406.4794). Forecast paper, no measurement. Source of the homogeneous-kSZ scaling 1.65 (σ₈/0.8)^4.46 μK² used by SPT-3G D1.
+21. **Planck Int. XXIV** — Planck Collaboration, *Planck intermediate results. XXIV. Constraints on variation of fundamental constants*, A&A 580, A22 (2015). A_kSZ appears only in contour plots; no value quoted.
+22. **Planck 2013 XVI** — Planck Collaboration, *Planck 2013 results. XVI. Cosmological parameters*, A&A 571, A16 (2014). [arXiv:1303.5076](https://arxiv.org/abs/1303.5076). Possible source of the unverified Planck 2014 point; not yet checked.
+23. **Coulton+ 2024** — W. R. Coulton et al., *The Atacama Cosmology Telescope: Detection of Patchy Screening of the Cosmic Microwave Background*, preprint (2024). [arXiv:2401.13033](https://arxiv.org/abs/2401.13033)
+24. **Gluscevic+ 2013** — V. Gluscevic, M. Kamionkowski & D. Hanson, *Patchy screening of the cosmic microwave background by inhomogeneous reionization*, PRD 87, 047303 (2013). [arXiv:1210.5507](https://arxiv.org/abs/1210.5507)
+25. **Namikawa 2018** — T. Namikawa, *Constraints on patchy reionization from Planck CMB temperature trispectrum*, PRD 97, 063505 (2018). [arXiv:1711.00058](https://arxiv.org/abs/1711.00058)
+26. **Kramer+ 2025** — D. M. Kramer et al., forecast for kSZ and patchy screening with AMBER simulations. [arXiv:2501.07623](https://arxiv.org/abs/2501.07623). Source of the AMBER Δz₉₀ relation used by ACT DR6 and SPT-3G D1.

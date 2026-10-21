@@ -14,6 +14,8 @@ Figures produced (all written to ``--outdir``, default ``./figures``):
   duration   reionization_duration_history.pdf
                                          Delta z limits (kSZ power, kSZ trispectrum)
                                          + higher-order amplitudes vs. fiducial
+             reionization_duration_only.pdf
+                                         same, Delta z panel only
   tsz        tSZ_measurements.pdf        tSZ power at l=3000 vs. year (ported unchanged)
 
 Usage
@@ -335,10 +337,21 @@ def _duration_marker(ax, x, y, color, method, s=260, zorder=5):
 
 
 def make_duration(outdir: Path) -> None:
+    """Two versions: with the higher-order-amplitude panel, and Delta z only."""
+    _plot_duration(outdir / "reionization_duration_history.pdf", with_amplitude=True)
+    _plot_duration(outdir / "reionization_duration_only.pdf", with_amplitude=False)
+
+
+def _plot_duration(out: Path, with_amplitude: bool) -> None:
     with mpl.rc_context(STYLE):
-        fig, (ax, bx) = plt.subplots(
-            2, 1, figsize=(20, 15), sharex=True,
-            gridspec_kw={"height_ratios": [2.2, 1], "hspace": 0.05})
+        if with_amplitude:
+            fig, (ax, bx) = plt.subplots(
+                2, 1, figsize=(20, 15), sharex=True,
+                gridspec_kw={"height_ratios": [2.2, 1], "hspace": 0.05})
+        else:
+            fig, ax = plt.subplots(figsize=(20, 10.5))
+            bx = None
+        shown = DURATION + (AMPLITUDE if with_amplitude else [])
 
         # --- top: Delta z upper limits
         for p in DURATION:
@@ -352,23 +365,32 @@ def make_duration(outdir: Path) -> None:
                         xy=(x + ldx, p.value + ldy), rotation=rot, ha=ha,
                         va="bottom", fontsize=17, color=c, linespacing=1.1)
         ax.set_ylabel(r"$\Delta z_{\rm re}$  (95% upper limit)", fontsize=44)
-        ax.set_ylim(0, 11)
+        ax.set_ylim(-0.3 if not with_amplitude else 0, 11)
         ax.set_yticks(np.arange(0, 11, 2))
 
         handles = []
         for exp in ["ACT", "SPT", "Planck", "Independent"]:
-            if any(p.exp == exp for p in DURATION + AMPLITUDE):
+            if any(p.exp == exp for p in shown):
                 handles.append(ax.scatter([], [], marker="v", s=260, color=COLORS[exp],
                                           edgecolor="black", lw=1.2, label=exp))
         handles.append(ax.scatter([], [], marker="v", s=260, color="0.6",
                                   edgecolor="black", lw=1.2, label="kSZ power spectrum"))
         handles.append(ax.scatter([], [], marker="v", s=260, facecolor="white",
                                   edgecolor="0.4", lw=2.5,
-                                  label="kSZ trispectrum / screening"))
+                                  label=("kSZ trispectrum / screening" if with_amplitude
+                                         else "kSZ trispectrum")))
         ax.legend(handles=handles, loc="upper right", ncol=2, handlelength=1.2,
                   borderpad=0.6, columnspacing=1.0)
         ax.text(0.012, 0.97, "[ ] = ionized fractions bracketing $\\Delta z$",
                 transform=ax.transAxes, ha="left", va="top", fontsize=18, color="0.3")
+
+        if not with_amplitude:
+            ax.set_xlabel("Year of publication", fontsize=58)
+            ax.set_xlim(2009.8, 2027.2)
+            ax.set_xticks(np.arange(2010, 2028, 2))
+            ax.tick_params(labelsize=36)
+            _save(fig, out)
+            return
 
         # --- bottom: amplitude relative to fiducial reionization model
         bx.set_yscale("log")
@@ -401,11 +423,14 @@ def make_duration(outdir: Path) -> None:
         bx.set_xticks(np.arange(2010, 2028, 2))
         for a in (ax, bx):
             a.tick_params(labelsize=36)
-        out = outdir / "reionization_duration_history.pdf"
-        fig.savefig(out, dpi=200)
-        fig.savefig(out.with_suffix(".png"), dpi=200)
-        plt.close(fig)
-        print(f"Saved: {out}")
+        _save(fig, out)
+
+
+def _save(fig, out: Path) -> None:
+    fig.savefig(out, dpi=200)
+    fig.savefig(out.with_suffix(".png"), dpi=200)
+    plt.close(fig)
+    print(f"Saved: {out}")
 
 
 def print_tables() -> None:

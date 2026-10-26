@@ -1,0 +1,23 @@
+#!/bin/bash
+#PBS -N amber_stitched_2gpc_mom
+#PBS -l nodes=1:ppn=16
+#PBS -l walltime=04:00:00
+#PBS -j oe
+#PBS -o /user1/swanith/ksz-pipeline-amber/jobs/amber_stitched_2gpc_momentum.log
+
+set -e
+cd /user1/swanith/ksz-pipeline-amber
+source /user1/swanith/miniconda3/etc/profile.d/conda.sh
+conda activate p21c_v3
+
+# Same as jobs/55 but --mode momentum: stitch q_z = x_HII * mom_z per
+# snapshot (as compute_cell's P_qperp is built) instead of
+# (1+delta) * x_HII * (mom_z/rho). Tests whether the velocity-path's
+# high-ell excess (x11 at ell=3000, x59 at ell=8000 vs Limber, mostly
+# from the fully ionized z=5-7 stretch -- jobs/55's run) comes from
+# dividing by near-zero interlaced/deconvolved rho. Progress lines also
+# print rms(velocity path)/rms(momentum path) per slice + rho stats.
+# jobs/55 took ~14 min; diagnostics add a little on every 50th slice.
+PYTHONPATH=src python -u scripts/55_amber_stitched_streaming.py \
+    --run runs/sweep_2gpc_1536/zmid8_dz4_az3_mh8_mfp3 --wrap-cycle-seed 123 \
+    --mode momentum

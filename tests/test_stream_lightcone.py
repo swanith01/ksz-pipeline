@@ -81,3 +81,78 @@ def test_stream_extrapolates_like_interp1d(run):
                         N, L, z_arr, pos, run['tau'], run['ne0'], 3)
     np.testing.assert_allclose(s['map_total'], total, rtol=0,
                                atol=2e-5 * np.abs(total).max())
+
+
+# --- mode='momentum' --------------------------------------------------------
+def _uniform_ionized_run(tmp_path, rho_fn):
+    N, L_h, h = 16, 64.0, 0.6766
+    rng = np.random.default_rng(5)
+    zre = np.full((N, N, N), 30.0, np.float32)          # ionized everywhere
+    np.asfortranarray(zre, dtype='<f4').ravel(order='F').tofile(
+        tmp_path / 'zre_test.dat')
+    for z in np.arange(5.5, 12.6, 1.0):
+        mom = (300 * rng.standard_normal((3, N, N, N))).astype(np.float32)
+        _write_fields(tmp_path / f'fields_z={z:05.2f}.dat', z,
+                      rho_fn(rng, N).astype(np.float32), mom)
+    L = L_h / h
+    z_arr = build_los_z_grid(6.0, 11.5, L / N)
+    pos = np.array([comoving_distance_mpc(z) for z in z_arr])
+    zt = np.linspace(0, 30, 301)
+    tau = np.c_[zt, np.ones_like(zt), 0.004 * zt]
+
+    def go(mode):
+        return stream_ksz_maps(io.list_field_files(str(tmp_path)),
+                               open_zre(str(tmp_path / 'zre_test.dat'), N),
+                               N, L, z_arr, pos, tau, 2e-7, 9, mode=mode)
+    return go
+
+
+def test_momentum_equals_velocity_when_rho_uniform(tmp_path):
+    go = _uniform_ionized_run(tmp_path, lambda rng, N: np.ones((N, N, N)))
+    v, m = go('velocity'), go('momentum')
+    np.testing.assert_allclose(m['map_total'], v['map_total'], rtol=0,
+                               atol=1e-6 * np.abs(v['map_total']).max())
+
+
+def _voidy(rng, N):
+    rho = 1 + 0.3 * rng.standard_normal((N, N, N))
+    rho[rng.random((N, N, N)) < 0.02] = 1e-4             # near-empty cells
+    return np.clip(rho, 1e-4, None)
+
+
+def test_momentum_mode_ignores_rho_and_velocity_mode_blows_up(tmp_path):
+    d1, d2 = tmp_path / 'a', tmp_path / 'b'
+    d1.mkdir(); d2.mkdir()
+    voidy = _uniform_ionized_run(d1, _voidy)
+    flat = _uniform_ionized_run(d2, lambda rng, N: np.ones((N, N, N)))
+    # rho-independence of momentum mode is tested separately below
+    m_voidy, v_voidy = voidy('momentum'), voidy('velocity')
+    rms = lambda a: float(np.sqrt(np.mean(a**2)))
+    assert rms(v_voidy['map_total']) > 10 * rms(m_voidy['map_total'])
+    assert rms(flat('momentum')['map_total']) > 0
+
+
+def test_momentum_mode_is_independent_of_rho(tmp_path):
+    """Same mom, different rho -> identical momentum-mode maps."""
+    N = 16
+    rng = np.random.default_rng(3)
+    moms = {z: (300 * rng.standard_normal((3, N, N, N))).astype(np.float32)
+            for z in np.arange(5.5, 12.6, 1.0)}
+    maps = []
+    for k, rho_fn in enumerate((lambda: np.ones((N, N, N)),
+                                lambda: _voidy(np.random.default_rng(1), N))):
+        d = tmp_path / f'r{k}'
+        d.mkdir()
+        np.full((N, N, N), 30.0, '<f4').ravel(order='F').tofile(d / 'zre.dat')
+        for z, mom in moms.items():
+            _write_fields(d / f'fields_z={z:05.2f}.dat', z,
+                          rho_fn().astype(np.float32), mom)
+        L = 64.0 / 0.6766
+        z_arr = build_los_z_grid(6.0, 11.5, L / N)
+        pos = np.array([comoving_distance_mpc(z) for z in z_arr])
+        zt = np.linspace(0, 30, 301)
+        maps.append(stream_ksz_maps(
+            io.list_field_files(str(d)), open_zre(str(d / 'zre.dat'), N), N, L,
+            z_arr, pos, np.c_[zt, np.ones_like(zt), 0.004 * zt], 2e-7, 9,
+            mode='momentum')['map_total'])
+    np.testing.assert_array_equal(maps[0], maps[1])

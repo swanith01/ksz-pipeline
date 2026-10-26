@@ -72,9 +72,16 @@ def main():
                    help="LOS end; default = highest snapshot z")
     p.add_argument('--wrap-cycle-seed', type=int, default=123)
     p.add_argument('--wrap-mode', default='wrap', choices=['wrap', 'grid-wrap'])
+    p.add_argument('--mode', default='velocity', choices=['velocity', 'momentum'],
+                   help="velocity: (1+delta) x_HII v_z with v=mom/rho, as "
+                        "scripts/32/33; momentum: q_z = x_HII mom_z per "
+                        "snapshot, no division (as compute_cell's P_qperp)")
     p.add_argument('--chen-csv', default='data/chen23_fiducial.csv')
-    p.add_argument('--out', default='data/plots/amber_stitched_vs_limber_2gpc.png')
+    p.add_argument('--out', default=None,
+                   help='default data/plots/amber_stitched_vs_limber_2gpc_<mode>.png')
     a = p.parse_args()
+    if a.out is None:
+        a.out = f'data/plots/amber_stitched_vs_limber_2gpc_{a.mode}.png'
 
     meta = json.load(open(os.path.join(a.run, 'amber_run.json')))
     N, L_h, ap = meta['N'], meta['L'], meta['amber_params']
@@ -103,7 +110,7 @@ def main():
     t0 = time.time()
     r = stream_ksz_maps(files, zre, N, L, z_arr, pos, tau,
                         meta.get('ne0_cgs', ne0_cgs()), a.wrap_cycle_seed,
-                        a.wrap_mode, progress_every=50)
+                        a.wrap_mode, progress_every=50, mode=a.mode)
     print(f"streamed in {time.time() - t0:.0f}s; chi_eff total "
           f"{r['chi_eff_total']:.1f}, patchy {r['chi_eff_patchy']:.1f} Mpc; "
           f"patchy window {r['z_window_patchy']}", flush=True)
@@ -136,7 +143,7 @@ def main():
         row += f"     {at(lq, chen[:, 0], chen[:, 1]):.4f}" if lq >= chen[0, 0] else ""
         print(row)
 
-    out_npz = os.path.join(a.run, 'stitched_streaming_wc%d.npz' % a.wrap_cycle_seed)
+    out_npz = os.path.join(a.run, f'stitched_streaming_wc{a.wrap_cycle_seed}_{a.mode}.npz')
     np.savez(out_npz, ell_total=lt, D_total=Dt, Derr_total=Et,
              ell_patchy=lp, D_patchy=Dp, Derr_patchy=Ep,
              chi_eff_total=r['chi_eff_total'], chi_eff_patchy=r['chi_eff_patchy'],
@@ -155,9 +162,9 @@ def main():
             axx.plot(R['ells_win'], R['D_ours_win'], color='C1', lw=1, ls=':',
                      label='Limber, patchy window')
         axx.errorbar(lt, Dt, Et, color='C2', lw=1.5, marker='.', capsize=0,
-                     label=f'stitched + wrap-cycle, z>={a.zmin:g}')
+                     label=f'stitched ({a.mode}), z>={a.zmin:g}')
         axx.errorbar(lp, Dp, Ep, color='C2', lw=1, ls=':', marker='.', ms=3,
-                     capsize=0, label='stitched + wrap-cycle, patchy window')
+                     capsize=0, label=f'stitched ({a.mode}), patchy window')
         axx.axvline(k_nyq * r['chi_eff_total'], color='0.6', ls='--', lw=1,
                     label='1D Nyquist')
         axx.set_xlabel(r'$\ell$')

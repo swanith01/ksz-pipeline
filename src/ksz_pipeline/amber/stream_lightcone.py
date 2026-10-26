@@ -70,6 +70,17 @@ class _Snapshot:
         return (rho.astype(np.float64) - 1.0, vz.astype(np.float64),
                 xH.astype(np.float64))
 
+    def q_slab(self, y, zre_slab):
+        """(q_z = x_HII * mom_z [cm/s], x_HI) float64 slabs -- the SAME
+        cell-wise q compute_cell's P_qperp is built from
+        (qperp_power_from_momentum), no division by rho."""
+        mz = np.asarray(self.mom[2, :, :, y], dtype=np.float64) * KMS_TO_CMS
+        xH = (zre_slab <= self.z).astype(np.float64)
+        return (1.0 - xH) * mz, xH
+
+    def rho_slab(self, y):
+        return np.asarray(self.rho[:, :, y], dtype=np.float64)
+
 
 def open_zre(path, N):
     return np.memmap(path, dtype=_DT, mode='r', shape=(N, N, N), order='F')
@@ -77,8 +88,21 @@ def open_zre(path, N):
 
 def stream_ksz_maps(field_files, zre, N, box_len_mpc, z_arr, pos_axis,
                     tau_table, ne0, wrap_cycle_seed, wrap_mode='wrap',
-                    xe_min=1.0e-4, xe_max=1.0 - 1.0e-4, progress_every=0):
+                    xe_min=1.0e-4, xe_max=1.0 - 1.0e-4, progress_every=0,
+                    mode='velocity'):
     """
+    mode : 'velocity' (default) -- exactly the in-memory stitched path:
+           delta, v_z = mom_z/rho and x_HI each blended in z and rotated
+           separately, integrand = (1+delta) x_HII v_z.
+           'momentum' -- q_z = x_HII * mom_z built cell-wise per
+           snapshot (as compute_cell's P_qperp is), then blended and
+           rotated; integrand = q_z. No division by rho, so near-empty
+           cells (AMBER's rho2 is interlaced+deconvolved and can be ~0)
+           can't produce huge v that interpolation then pairs with a
+           neighbour's normal rho. In this mode every progress line also
+           reports, for that slice, rms of the velocity-path integrand
+           over the momentum-path one and the slab's rho statistics.
+
     Parameters
     ----------
     field_files : fields_*.dat paths (any order; sorted by z here)
@@ -103,6 +127,8 @@ def stream_ksz_maps(field_files, zre, N, box_len_mpc, z_arr, pos_axis,
     chi_eff_total, chi_eff_patchy [Mpc]; xe_slices (n,); z_arr; pos_axis;
     z_window_patchy (zlo, zhi) or None
     """
+    if mode not in ('velocity', 'momentum'):
+        raise ValueError(f"mode must be 'velocity' or 'momentum', got {mode!r}")
     z_arr = np.asarray(z_arr, dtype=float)
     pos_axis = np.asarray(pos_axis, dtype=float)
     cell = box_len_mpc / N
@@ -142,15 +168,35 @@ def stream_ksz_maps(field_files, zre, N, box_len_mpc, z_arr, pos_axis,
         w1 = (z - sz[i0]) / (sz[i0 + 1] - sz[i0])      # extrapolates outside
         w0 = 1.0 - w1
         zre_slab = np.asarray(zre[:, :, y], dtype=np.float32)
-        a0 = snaps[i0].slabs(y, zre_slab)
-        a1 = snaps[i0 + 1].slabs(y, zre_slab)
-        delta, vz, xH = (map_coordinates(w0 * f0 + w1 * f1, [ic, jc],
-                                         order=1, mode=wrap_mode)
-                         for f0, f1 in zip(a0, a1))
+        report = progress_every and (n + 1) % progress_every == 0
+        diag = ''
 
-        xHII = 1.0 - xH
-        integ = (1.0 + delta) * xHII * (vz / MPC_CM) / c_Mpc_s * vis[n]
-        xe = float(xHII.mean())
+        def _rot(f):
+            return map_coordinates(f, [ic, jc], order=1, mode=wrap_mode)
+
+        def _vel_integrand():
+            a0 = snaps[i0].slabs(y, zre_slab)
+            a1 = snaps[i0 + 1].slabs(y, zre_slab)
+            delta, vz, xH = (_rot(w0 * f0 + w1 * f1) for f0, f1 in zip(a0, a1))
+            xHII = 1.0 - xH
+            return (1.0 + delta) * xHII * (vz / MPC_CM) / c_Mpc_s * vis[n], xHII
+
+        if mode == 'velocity':
+            integ, xHII = _vel_integrand()
+            xe = float(xHII.mean())
+        else:
+            q0, h0 = snaps[i0].q_slab(y, zre_slab)
+            q1, h1 = snaps[i0 + 1].q_slab(y, zre_slab)
+            integ = _rot(w0 * q0 + w1 * q1) / MPC_CM / c_Mpc_s * vis[n]
+            xe = float(1.0 - (w0 * h0 + w1 * h1).mean())
+            if report:
+                iv, _ = _vel_integrand()
+                rq = float(np.sqrt(np.mean(integ**2)))
+                rv = float(np.sqrt(np.mean(iv**2)))
+                rho = snaps[i0].rho_slab(y)
+                diag = (f"  | rms vel-path/mom-path {rv / rq if rq else np.nan:.3f}"
+                        f"  rho min {rho.min():.3g}, frac rho<0.05 "
+                        f"{(rho < 0.05).mean():.2e}")
         m = 1.0 if xe_min <= xe <= xe_max else 0.0
         xe_slices[n] = xe
         r = float(np.sqrt(np.mean(integ**2)))
@@ -165,11 +211,11 @@ def stream_ksz_maps(field_files, zre, N, box_len_mpc, z_arr, pos_axis,
                 map_pat += w * 0.5 * (pint * pm + integ * m)
         prev = (integ, m)
 
-        if progress_every and (n + 1) % progress_every == 0:
+        if report:
             el = time.time() - t0
             print(f"  slice {n + 1}/{z_arr.size}  z={z:.3f}  x_e={xe:.4f}  "
-                  f"{el:.0f}s elapsed, ~{el / (n + 1) * (z_arr.size - n - 1):.0f}s left",
-                  flush=True)
+                  f"{el:.0f}s elapsed, ~{el / (n + 1) * (z_arr.size - n - 1):.0f}s left"
+                  + diag, flush=True)
 
     def _chi(rms):
         return float(np.sum(rms * pos_axis) / np.sum(rms)) if rms.sum() > 0 else np.nan

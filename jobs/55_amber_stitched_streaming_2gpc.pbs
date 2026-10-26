@@ -1,0 +1,22 @@
+#!/bin/bash
+#PBS -N amber_stitched_2gpc
+#PBS -l nodes=1:ppn=16
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -o /user1/swanith/ksz-pipeline-amber/jobs/amber_stitched_2gpc.log
+
+set -e
+cd /user1/swanith/ksz-pipeline-amber
+source /user1/swanith/miniconda3/etc/profile.d/conda.sh
+conda activate p21c_v3
+
+# Stitched-lightcone + wrap-cycle kSZ (total z>=5 and patchy-window) for
+# the 2 Gpc/h, 1536^3 fiducial run, streamed slab by slab (~1 GB RAM; the
+# in-memory scripts/32 would need >1 TB). Pure post-processing of the raw
+# fields_*.dat -- run this BEFORE pruning them.
+#
+# Expected cost: ~1500 LOS slices x ~0.7 s compute + ~130 GB of slab reads
+# -> well under an hour; 6h is margin for slow shared-disk I/O.
+# Progress is printed every 50 slices (python -u, unbuffered).
+PYTHONPATH=src python -u scripts/55_amber_stitched_streaming.py \
+    --run runs/sweep_2gpc_1536/zmid8_dz4_az3_mh8_mfp3 --wrap-cycle-seed 123

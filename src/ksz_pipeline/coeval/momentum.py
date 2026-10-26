@@ -269,3 +269,92 @@ def qparallel_power(delta, xH, vx, vy, vz, BOX_LEN, nbins=None):
         P_std.append(p_flat[mask].std())
 
     return np.array(k_bins), np.array(P_bins), np.array(P_std)
+
+
+# ---------------------------------------------------------------------------
+# Momentum-field (AMBER) q_perp / q_parallel split -- 2026-10-26.
+# qparallel_power above takes (delta, v) and so would need v = mom/rho for
+# AMBER, which is ill-defined where AMBER's deconvolved rho <= 0. These take
+# q directly. Binning/normalisation identical to _qperp_power_from_q.
+# ---------------------------------------------------------------------------
+
+def _kgrid(N, L):
+    kfreq = np.fft.fftfreq(N, d=L / N) * 2.0 * np.pi
+    return kfreq, kfreq.reshape(N, 1, 1), kfreq.reshape(1, N, 1), kfreq.reshape(1, 1, N)
+
+
+def _bin_like_qperp(p_flat, k_flat, kfreq, N, nbins):
+    """Exactly _qperp_power_from_q's radial binning."""
+    if nbins is None:
+        nbins = max(2, int(np.ceil(np.cbrt(N) * 8)))
+    pos_k = np.abs(kfreq[kfreq > 0.0])
+    kmin = pos_k.min() if pos_k.size > 0 else 1e-6
+    kmax = np.abs(kfreq).max() * np.sqrt(3.0)
+    if kmax <= kmin:
+        kmax = kmin * 10.0
+    bins = np.geomspace(kmin, kmax, nbins)
+    digit = np.digitize(k_flat, bins)
+    k_b, P_b, S_b = [], [], []
+    for i in range(1, len(bins)):
+        mask = digit == i
+        if not np.any(mask):
+            continue
+        k_b.append(k_flat[mask].mean())
+        P_b.append(p_flat[mask].mean())
+        S_b.append(p_flat[mask].std())
+    return np.array(k_b), np.array(P_b), np.array(S_b)
+
+
+def qsplit_power_from_q(qx, qy, qz, BOX_LEN, nbins=None):
+    """
+    P_{q_perp}(k) and P_{q_parallel}(k) of one momentum field q, same FFT
+    normalisation, "/2" convention and k bins as _qperp_power_from_q (so
+    P_perp here equals qperp_power_from_momentum's output, and the two are
+    directly addable). The k=0 mode (bulk flow) has no direction; it is
+    counted in neither.
+
+    Returns k, P_perp, P_perp_std, P_par, P_par_std.
+    """
+    N = qx.shape[0]
+    L = float(BOX_LEN)
+    d, V = L / N, L**3
+    kfreq, kx1, ky1, kz1 = _kgrid(N, L)
+    k2 = kx1**2 + ky1**2 + kz1**2
+    k_mag = np.sqrt(k2)
+    k2_safe = np.where(k2 == 0.0, np.inf, k2)
+    Qs = [np.fft.fftn(q) * d**3 for q in (qx, qy, qz)]
+    kdotQ_k2 = (Qs[0] * kx1 + Qs[1] * ky1 + Qs[2] * kz1) / k2_safe
+    tot2 = sum(np.abs(Q)**2 for Q in Qs)
+    par2 = np.abs(kdotQ_k2)**2 * k2                       # |Q.k_hat|^2
+    perp2 = sum(np.abs(Q - kdotQ_k2 * k1)**2 for Q, k1 in zip(Qs, (kx1, ky1, kz1)))
+    del Qs, kdotQ_k2, tot2
+    k_flat = k_mag.ravel()
+    k, Pp, Sp = _bin_like_qperp((perp2 / V / 2.0).ravel(), k_flat, kfreq, N, nbins)
+    _, Pl, Sl = _bin_like_qperp((par2 / V / 2.0).ravel(), k_flat, kfreq, N, nbins)
+    return k, Pp, Sp, Pl, Sl
+
+
+def transverse_part(qx, qy, qz):
+    """
+    Real-space transverse (divergence-free) part of a periodic vector
+    field: inverse FFT of Q - k_hat (k_hat.Q). The k=0 mode is kept in
+    the transverse part. The longitudinal part is q - transverse_part(q).
+
+    For even N the Nyquist plane of each axis has no -k partner, so the raw
+    projection breaks Hermitian symmetry and .real would drop power; the
+    Nyquist component of k is set to 0 in the projection (standard
+    spectral-derivative convention). The split is then exactly orthogonal:
+    |q|^2 = |q_T|^2 + |q_L|^2 summed over all modes.
+    """
+    N = qx.shape[0]
+    kfreq = np.fft.fftfreq(N)                            # units cancel in k_hat
+    if N % 2 == 0:
+        kfreq[N // 2] = 0.0
+    kx1, ky1, kz1 = (kfreq.reshape(N, 1, 1), kfreq.reshape(1, N, 1),
+                     kfreq.reshape(1, 1, N))
+    k2 = kx1**2 + ky1**2 + kz1**2
+    k2_safe = np.where(k2 == 0.0, np.inf, k2)
+    Qs = [np.fft.fftn(q) for q in (qx, qy, qz)]
+    kdotQ_k2 = (Qs[0] * kx1 + Qs[1] * ky1 + Qs[2] * kz1) / k2_safe
+    return tuple(np.fft.ifftn(Q - kdotQ_k2 * k1).real
+                 for Q, k1 in zip(Qs, (kx1, ky1, kz1)))

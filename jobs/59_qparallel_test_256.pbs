@@ -1,0 +1,20 @@
+#!/bin/bash
+#PBS -N amber_qpar_test
+#PBS -l nodes=1:ppn=16
+#PBS -l walltime=03:00:00
+#PBS -j oe
+#PBS -o /user1/swanith/ksz-pipeline-amber/jobs/amber_qpar_test.log
+
+set -e
+cd /user1/swanith/ksz-pipeline-amber
+source /user1/swanith/miniconda3/etc/profile.d/conda.sh
+conda activate p21c_v3
+
+# Is the stitched map's low-ell excess the longitudinal (q_parallel) part
+# of the momentum? Our version of Ma et al.'s kSZ auto-power figure for the
+# 256^3 fiducial: Limber D_qperp / D_qpar (heuristic) and stitched maps of
+# full q vs q_perp only (same snapshots, LOS grid, re-orientations), z>=5.
+# Read-only on the run's fields; ~15 GB of temporary derived snapshots
+# under <run>/qpar_test, removed at the end. Safe alongside jobs/58.
+PYTHONPATH=src python -u scripts/57_qparallel_test_amber.py \
+    --run runs/sweep_chen2023/zmid8_dz4_az3_mh8_mfp3 --geometry reorient

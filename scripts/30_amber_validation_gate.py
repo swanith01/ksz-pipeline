@@ -125,10 +125,16 @@ def gate1(run, N, L_h, h, zre):
     return ok
 
 
-def gate2(run, meta, N, L_h, h, zre):
-    cmb = os.path.join(run, 'output', 'cmb')
+def amber_cl_sum(cmb, meta, la, zlo, zhi):
+    """
+    AMBER's own Limber C_ell (cmbreion.f90 formula), rebuilt from its
+    power_z=*.txt files, summed over shells whose MIDPOINT lies in
+    [zlo, zhi]. amber_cl_sum(cmb, meta, la, -1, 1e3) reproduces
+    cl_ksz.txt (gate 2a). Module-level so other scripts (e.g.
+    scripts/54) can evaluate AMBER's native spectrum over any z range.
+    """
+    h = meta['amber_params']['h']
     t = np.loadtxt(os.path.join(cmb, 'tau.txt'), skiprows=1)
-    la, Ca = io.read_amber_cl(os.path.join(cmb, 'cl_ksz.txt'))
     xe = adapter.electron_fraction_amber(meta['XH'], meta['YHe'])
     # meta['ne0_cgs'] is saved by make_amber_input.py for whichever
     # cosmology this run actually used -- NOT the repo's Planck18-only
@@ -136,38 +142,50 @@ def gate2(run, meta, N, L_h, h, zre):
     # Runs generated before this field existed (e.g. the original
     # amber_q01) always used Planck18, so that's the correct fallback --
     # not a guess.
-    if 'ne0_cgs' not in meta:
-        print("  (amber_run.json predates ne0_cgs field -- falling back "
-             "to Planck18's value, correct for any pre-existing run)")
     ne0_amber = meta.get('ne0_cgs', ne0_cgs()) / xe  # nH + 2 nHe
     ap = meta['amber_params']
 
     pw = sorted(glob.glob(os.path.join(cmb, 'power_z=*.txt')), key=io.z_from_name)
-    zs = np.array([io.z_from_name(f) for f in pw])
-    ps = [io.read_amber_power(f) for f in pw]
+    if not pw:
+        raise FileNotFoundError(f"no power_z=*.txt files in {cmb}")
+    C = np.zeros(la.shape)
+    for f in pw:
+        z = io.z_from_name(f)
+        if not (zlo - 1e-9 <= z <= zhi + 1e-9):
+            continue
+        p = io.read_amber_power(f)
+        z1, z2 = shell_edges(z, meta['czdel'], meta['cspacing'], meta['czmin'])
+        r = chi_amber(z, ap) * h                                    # Mpc/h
+        dr = (chi_amber(z2, ap) - chi_amber(z1, ap)) * h
+        a = 1 / (1 + z)
+        tau = np.interp(z, t[:, 0], t[:, 2])
+        # AMBER evaluates P_qq(k=l/r) with a NATURAL cubic spline
+        # (mkl.f90 spline_cubic: DF_PP_NATURAL / DF_BC_FREE_END), not
+        # linear interpolation. On coarse k tables (small boxes) the
+        # two differ by several % at low ell, where k=l/r falls in the
+        # first couple of bins -- so match AMBER exactly here.
+        Pq = CubicSpline(p['k_h'], p['P_qq'], bc_type='natural')(la / r)
+        C += ((SIGMA_T * ne0_amber / C_CGS)**2 * (MPC_CM / h)**2 * 1e10
+              * (Pq / 2) * np.exp(-2 * tau) / (r**2 * a**4) * dr)
+    return C
+
+
+def cl_to_dl(C, l):
+    return l * (l + 1) / (2 * np.pi) * C * (T_CMB_K * 1e6)**2
+
+
+def gate2(run, meta, N, L_h, h, zre):
+    cmb = os.path.join(run, 'output', 'cmb')
+    la, Ca = io.read_amber_cl(os.path.join(cmb, 'cl_ksz.txt'))
+    if 'ne0_cgs' not in meta:
+        print("  (amber_run.json predates ne0_cgs field -- falling back "
+             "to Planck18's value, correct for any pre-existing run)")
+    ap = meta['amber_params']
 
     def amber_sum(zlo, zhi):
-        C = np.zeros(la.shape)
-        for z, p in zip(zs, ps):
-            if not (zlo - 1e-9 <= z <= zhi + 1e-9):
-                continue
-            z1, z2 = shell_edges(z, meta['czdel'], meta['cspacing'], meta['czmin'])
-            r = chi_amber(z, ap) * h                                    # Mpc/h
-            dr = (chi_amber(z2, ap) - chi_amber(z1, ap)) * h
-            a = 1 / (1 + z)
-            tau = np.interp(z, t[:, 0], t[:, 2])
-            # AMBER evaluates P_qq(k=l/r) with a NATURAL cubic spline
-            # (mkl.f90 spline_cubic: DF_PP_NATURAL / DF_BC_FREE_END), not
-            # linear interpolation. On coarse k tables (small boxes) the
-            # two differ by several % at low ell, where k=l/r falls in the
-            # first couple of bins -- so match AMBER exactly here.
-            Pq = CubicSpline(p['k_h'], p['P_qq'], bc_type='natural')(la / r)
-            C += ((SIGMA_T * ne0_amber / C_CGS)**2 * (MPC_CM / h)**2 * 1e10
-                  * (Pq / 2) * np.exp(-2 * tau) / (r**2 * a**4) * dr)
-        return C
+        return amber_cl_sum(cmb, meta, la, zlo, zhi)
 
-    def D(C, l):
-        return l * (l + 1) / (2 * np.pi) * C * (T_CMB_K * 1e6)**2
+    D = cl_to_dl
 
     Cfull = amber_sum(-1, 1e3)
     sel = la >= 2000

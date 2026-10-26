@@ -39,7 +39,7 @@ def _interp_loglog(xq, xp, fp):
 
 
 def compute_cell(results_qperp, ells_full=None, ne0=None, tau0=None,
-                  cosmology=None):
+                  cosmology=None, post_eor_zmin=None):
     """
     Compute C_ell and D_ell from cached P_{q_perp} results.
 
@@ -76,6 +76,17 @@ def compute_cell(results_qperp, ells_full=None, ne0=None, tau0=None,
         half-applied fix this pipeline has hit before. See
         ksz_pipeline.amber.adapter for a helper that builds both from
         AMBER's own input parameters together.
+    post_eor_zmin : float, optional
+        Default None -> patchy window only (0.01%..99.99% neutral),
+        unchanged behaviour. Pass a redshift to ALSO include the fully
+        ionized (post-reionization / homogeneous kSZ) snapshots down to
+        that redshift: the window becomes every snapshot with
+        z >= post_eor_zmin that is not essentially fully neutral
+        (xH_mean <= 1 - 1e-4; those carry ~zero q_perp power). Use this
+        to compare against spectra integrated over a fixed redshift
+        range rather than the patchy window -- e.g. Chen+23
+        (arXiv:2203.04337, Sec 5.2: "integrated from z=5 to z=30").
+        tau0 then means tau(0 -> lowest kept snapshot), as before.
 
     Returns
     -------
@@ -106,10 +117,24 @@ def compute_cell(results_qperp, ells_full=None, ne0=None, tau0=None,
     # is already computed per snapshot, so use it directly instead.
     XHI_MIN_PATCHY = 1.0e-4          # 0.01% neutral -> end of patchy regime
     XHI_MAX_PATCHY = 1.0 - 1.0e-4    # 99.99% neutral -> start of patchy regime
-    ZS_asc = np.array(sorted([z for z in results_qperp.keys()
-                               if XHI_MIN_PATCHY <= results_qperp[z]['xH_mean']
-                                                  <= XHI_MAX_PATCHY]),
-                       dtype=float)
+    if post_eor_zmin is None:
+        ZS_asc = np.array(sorted([z for z in results_qperp.keys()
+                                   if XHI_MIN_PATCHY <= results_qperp[z]['xH_mean']
+                                                      <= XHI_MAX_PATCHY]),
+                           dtype=float)
+    else:
+        # Patchy window PLUS fully ionized snapshots down to post_eor_zmin.
+        # Only the lower x_HI bound is dropped; essentially fully neutral
+        # snapshots stay excluded (zero power, and _interp_loglog needs
+        # positive values).
+        ZS_asc = np.array(sorted([z for z in results_qperp.keys()
+                                   if z >= post_eor_zmin - 1e-9
+                                   and results_qperp[z]['xH_mean']
+                                       <= XHI_MAX_PATCHY]),
+                           dtype=float)
+        if ZS_asc.size == 0:
+            raise ValueError(f"compute_cell: no snapshots with "
+                             f"z >= {post_eor_zmin}")
 
     chi_mpc  = np.array([cosmo_use.comoving_distance(z).value for z in ZS_asc])
     dchi_mpc = np.abs(np.gradient(chi_mpc))

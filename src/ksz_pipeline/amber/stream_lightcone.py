@@ -117,7 +117,12 @@ def stream_ksz_maps(field_files, zre, N, box_len_mpc, z_arr, pos_axis,
                   in-memory path uses comoving_distance_mpc().
     tau_table   : AMBER tau.txt array (col 0 z, col 2 tau(0->z))
     ne0         : [cm^-3], meta['ne0_cgs']
-    wrap_cycle_seed : int (per-wrap-cycle rotation, as stitch_field)
+    wrap_cycle_seed : int (per-wrap-cycle rotation, bilinear, as
+                  stitch_field) or None: NO rotation, slabs used exactly
+                  as stored (= stitch_field's wrap_cycle_seed=None path
+                  with angle_deg=0) -- no interpolation, so no smoothing,
+                  but periodic repeats are not broken. Appropriate when
+                  the LOS spans <= 1 box length.
     wrap_mode   : 'wrap' (default, as stitch_field) or 'grid-wrap'
     progress_every : print a progress line every this many slices (0=off)
 
@@ -160,9 +165,9 @@ def stream_ksz_maps(field_files, zre, N, box_len_mpc, z_arr, pos_axis,
         d = pos_axis[n] - pos_axis[0]
         y = int(round(d / cell)) % N
         cyc = int(d // (cell * N))
-        if cyc not in coords:
+        if wrap_cycle_seed is not None and cyc not in coords:
             coords[cyc] = rotated_coords(N, cycle_angle(cyc, wrap_cycle_seed))
-        ic, jc = coords[cyc]
+        ic, jc = coords.get(cyc, (None, None))
 
         i0 = int(np.clip(np.searchsorted(sz, z) - 1, 0, sz.size - 2))
         w1 = (z - sz[i0]) / (sz[i0 + 1] - sz[i0])      # extrapolates outside
@@ -172,6 +177,8 @@ def stream_ksz_maps(field_files, zre, N, box_len_mpc, z_arr, pos_axis,
         diag = ''
 
         def _rot(f):
+            if wrap_cycle_seed is None:
+                return f
             return map_coordinates(f, [ic, jc], order=1, mode=wrap_mode)
 
         def _vel_integrand():

@@ -54,7 +54,7 @@ def _reference(run, z_arr, seed):
     return patchy, total, lc
 
 
-@pytest.mark.parametrize('seed', [7, 123])
+@pytest.mark.parametrize('seed', [7, 123, None])
 def test_stream_matches_in_memory(run, seed):
     N, L = run['N'], run['L_h'] / run['h']
     z_arr = build_los_z_grid(6.0, 11.5, L / N)
@@ -156,3 +156,24 @@ def test_momentum_mode_is_independent_of_rho(tmp_path):
             z_arr, pos, np.c_[zt, np.ones_like(zt), 0.004 * zt], 2e-7, 9,
             mode='momentum')['map_total'])
     np.testing.assert_array_equal(maps[0], maps[1])
+
+
+def test_no_rotation_momentum_mode_runs_and_differs_from_rotated(tmp_path):
+    go_dir = tmp_path / 'x'
+    go_dir.mkdir()
+    N = 16
+    rng = np.random.default_rng(4)
+    np.full((N, N, N), 30.0, '<f4').ravel(order='F').tofile(go_dir / 'zre.dat')
+    for z in np.arange(5.5, 12.6, 1.0):
+        _write_fields(go_dir / f'fields_z={z:05.2f}.dat', z,
+                      np.ones((N, N, N), np.float32),
+                      (300 * rng.standard_normal((3, N, N, N))).astype(np.float32))
+    L = 64.0 / 0.6766
+    z_arr = build_los_z_grid(6.0, 11.5, L / N)
+    pos = np.array([comoving_distance_mpc(z) for z in z_arr])
+    zt = np.linspace(0, 30, 301)
+    args = (io.list_field_files(str(go_dir)), open_zre(str(go_dir / 'zre.dat'), N),
+            N, L, z_arr, pos, np.c_[zt, np.ones_like(zt), 0.004 * zt], 2e-7)
+    a = stream_ksz_maps(*args, None, mode='momentum')['map_total']
+    b = stream_ksz_maps(*args, 9, mode='momentum')['map_total']
+    assert np.all(np.isfinite(a)) and not np.allclose(a, b)

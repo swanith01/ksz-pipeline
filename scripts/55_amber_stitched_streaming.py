@@ -71,6 +71,10 @@ def main():
     p.add_argument('--zmax', type=float, default=None,
                    help="LOS end; default = highest snapshot z")
     p.add_argument('--wrap-cycle-seed', type=int, default=123)
+    p.add_argument('--no-rotation', action='store_true',
+                   help='no wrap-cycle rotation: slabs used exactly as stored '
+                        '(no bilinear interpolation). Fine when the LOS spans '
+                        '<= 1 box length; otherwise periodic repeats survive')
     p.add_argument('--wrap-mode', default='wrap', choices=['wrap', 'grid-wrap'])
     p.add_argument('--mode', default='velocity', choices=['velocity', 'momentum'],
                    help="velocity: (1+delta) x_HII v_z with v=mom/rho, as "
@@ -80,8 +84,10 @@ def main():
     p.add_argument('--out', default=None,
                    help='default data/plots/amber_stitched_vs_limber_2gpc_<mode>.png')
     a = p.parse_args()
+    seed = None if a.no_rotation else a.wrap_cycle_seed
+    tag = f"{a.mode}_{'norot' if seed is None else f'wc{seed}'}"
     if a.out is None:
-        a.out = f'data/plots/amber_stitched_vs_limber_2gpc_{a.mode}.png'
+        a.out = f'data/plots/amber_stitched_vs_limber_2gpc_{tag}.png'
 
     meta = json.load(open(os.path.join(a.run, 'amber_run.json')))
     N, L_h, ap = meta['N'], meta['L'], meta['amber_params']
@@ -105,11 +111,14 @@ def main():
           f"span {pos[-1] - pos[0]:.0f} Mpc = {(pos[-1] - pos[0]) / L:.2f} box "
           f"lengths, {len(files)} snapshots", flush=True)
 
+    if seed is None and (pos[-1] - pos[0]) > L:
+        print(f"  WARNING: --no-rotation with a LOS of {(pos[-1] - pos[0]) / L:.2f} "
+              f"box lengths -- periodic repeats are NOT broken", flush=True)
     tau = np.loadtxt(os.path.join(cmb, 'tau.txt'), skiprows=1)
     zre = open_zre(io.find_zre_file(os.path.join(a.run, 'output', 'reion')), N)
     t0 = time.time()
     r = stream_ksz_maps(files, zre, N, L, z_arr, pos, tau,
-                        meta.get('ne0_cgs', ne0_cgs()), a.wrap_cycle_seed,
+                        meta.get('ne0_cgs', ne0_cgs()), seed,
                         a.wrap_mode, progress_every=50, mode=a.mode)
     print(f"streamed in {time.time() - t0:.0f}s; chi_eff total "
           f"{r['chi_eff_total']:.1f}, patchy {r['chi_eff_patchy']:.1f} Mpc; "
@@ -143,7 +152,7 @@ def main():
         row += f"     {at(lq, chen[:, 0], chen[:, 1]):.4f}" if lq >= chen[0, 0] else ""
         print(row)
 
-    out_npz = os.path.join(a.run, f'stitched_streaming_wc{a.wrap_cycle_seed}_{a.mode}.npz')
+    out_npz = os.path.join(a.run, f'stitched_streaming_{tag}.npz')
     np.savez(out_npz, ell_total=lt, D_total=Dt, Derr_total=Et,
              ell_patchy=lp, D_patchy=Dp, Derr_patchy=Ep,
              chi_eff_total=r['chi_eff_total'], chi_eff_patchy=r['chi_eff_patchy'],
@@ -162,9 +171,9 @@ def main():
             axx.plot(R['ells_win'], R['D_ours_win'], color='C1', lw=1, ls=':',
                      label='Limber, patchy window')
         axx.errorbar(lt, Dt, Et, color='C2', lw=1.5, marker='.', capsize=0,
-                     label=f'stitched ({a.mode}), z>={a.zmin:g}')
+                     label=f'stitched ({tag}), z>={a.zmin:g}')
         axx.errorbar(lp, Dp, Ep, color='C2', lw=1, ls=':', marker='.', ms=3,
-                     capsize=0, label=f'stitched ({a.mode}), patchy window')
+                     capsize=0, label=f'stitched ({tag}), patchy window')
         axx.axvline(k_nyq * r['chi_eff_total'], color='0.6', ls='--', lw=1,
                     label='1D Nyquist')
         axx.set_xlabel(r'$\ell$')

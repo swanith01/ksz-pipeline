@@ -177,3 +177,85 @@ def test_no_rotation_momentum_mode_runs_and_differs_from_rotated(tmp_path):
     a = stream_ksz_maps(*args, None, mode='momentum')['map_total']
     b = stream_ksz_maps(*args, 9, mode='momentum')['map_total']
     assert np.all(np.isfinite(a)) and not np.allclose(a, b)
+
+
+# --- geometry='reorient' ----------------------------------------------------
+from ksz_pipeline.amber.stream_lightcone import view_slab, reorient_params
+from ksz_pipeline.utils.constants import SIGMA_T, C_CGS
+
+
+def test_view_slab_default_and_matches_full_roll(tmp_path):
+    N = 12
+    rng = np.random.default_rng(0)
+    arr = rng.standard_normal((N, N, N)).astype('<f4')
+    arr.ravel(order='F').tofile(tmp_path / 'a.dat')
+    mm = open_zre(str(tmp_path / 'a.dat'), N)              # F-order memmap
+    for y in (0, 5, N - 1):
+        np.testing.assert_array_equal(view_slab(mm, y), mm[:, :, y])
+    for axis in range(3):
+        shift = tuple(int(v) for v in rng.integers(0, N, 3))
+        rolled = np.roll(np.asarray(mm), [-s for s in shift], axis=(0, 1, 2))
+        for y in (0, 7):
+            np.testing.assert_array_equal(view_slab(mm, y, (axis, shift)),
+                                          np.take(rolled, y, axis=axis))
+
+
+def test_reorient_params_deterministic_and_varied():
+    a = [reorient_params(c, 123, 256) for c in range(30)]
+    assert a == [reorient_params(c, 123, 256) for c in range(30)]
+    assert {ax for ax, _ in a} == {0, 1, 2}
+    assert len({sh for _, sh in a}) == 30
+
+
+def _const_mom_run(tmp_path, mvec, N=8, L_h=64.0, h=0.6766):
+    np.full((N, N, N), 30.0, '<f4').ravel(order='F').tofile(tmp_path / 'zre.dat')
+    for z in np.arange(5.5, 12.6, 1.0):
+        mom = np.empty((3, N, N, N), np.float32)
+        for c in range(3):
+            mom[c] = mvec[c]
+        _write_fields(tmp_path / f'fields_z={z:05.2f}.dat', z,
+                      np.ones((N, N, N), np.float32), mom)
+    L = L_h / h
+    z_arr = build_los_z_grid(6.0, 11.5, L / N)
+    pos = np.array([comoving_distance_mpc(z) for z in z_arr])
+    zt = np.linspace(0, 30, 301)
+    tau = np.c_[zt, np.ones_like(zt), 0.004 * zt]
+    return (io.list_field_files(str(tmp_path)), open_zre(str(tmp_path / 'zre.dat'), N),
+            N, L, z_arr, pos, tau, 2e-7)
+
+
+@pytest.mark.parametrize('mode', ['momentum', 'velocity'])
+def test_reorient_uses_momentum_component_along_chosen_axis(tmp_path, mode):
+    mvec = (100.0, 200.0, 400.0)                           # km/s, distinct
+    files, zre, N, L, z_arr, pos, tau, ne0 = _const_mom_run(tmp_path, mvec)
+    seed = 17
+    out = stream_ksz_maps(files, zre, N, L, z_arr, pos, tau, ne0, seed,
+                          mode=mode, geometry='reorient')['map_total']
+    # independent expectation: uniform map, trapezoid over slices of
+    # mom[los_axis(cycle)] -- same weights compute_ksz_map uses
+    cell = L / N
+    cyc = ((pos - pos[0]) // (cell * N)).astype(int)
+    assert len(set(cyc)) > 3
+    comp = np.array([mvec[reorient_params(c, seed, N)[0]] for c in cyc])
+    vis = np.exp(-np.interp(z_arr, tau[:, 0], tau[:, 2]))
+    I = comp * 1e5 / MPC_CM / (C_CGS / MPC_CM) * vis
+    a2 = (1 / (1 + z_arr))**2
+    w = ne0 * SIGMA_T * C_CGS / (0.5 * (a2[:-1] + a2[1:])) \
+        * np.diff(pos) * MPC_CM / C_CGS
+    expect = np.sum(w * 0.5 * (I[:-1] + I[1:]))
+    np.testing.assert_allclose(out, expect, rtol=1e-10)
+
+
+def test_reorient_differs_from_identity_over_many_cycles(run):
+    N, L = run['N'], run['L_h'] / run['h']
+    z_arr = build_los_z_grid(6.0, 11.5, L / N)
+    pos = np.array([comoving_distance_mpc(z) for z in z_arr])
+    zre = open_zre(str(run['dir'] / 'zre_test.dat'), N)
+    args = (run['files'], zre, N, L, z_arr, pos, run['tau'], run['ne0'])
+    ident = stream_ksz_maps(*args, None, mode='momentum')['map_total']
+    reo = stream_ksz_maps(*args, 5, mode='momentum', geometry='reorient')['map_total']
+    assert np.all(np.isfinite(reo)) and not np.allclose(ident, reo)
+    # exact integer remapping preserves the one-point distribution of each
+    # slab, so map variance stays the same order (rotation's smoothing
+    # would not); loose bound, just catches gross errors
+    assert 0.2 < reo.std() / ident.std() < 5

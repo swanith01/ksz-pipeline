@@ -49,6 +49,30 @@ from .adapter import KMS_TO_CMS
 _DT = np.dtype('<f4')
 
 
+_Z_VIEW = (2, (0, 0, 0))     # LOS = box z axis, no shift (original geometry)
+
+
+def reorient_params(cycle_idx, seed, N):
+    """(los_axis, (sx, sy, sz)) for one wrap cycle: which box axis is the
+    line of sight and an integer periodic shift on every axis. Deterministic
+    in (seed, cycle_idx), like cycle_angle, but a separate random stream."""
+    rng = np.random.default_rng((int(seed), int(cycle_idx), 1))
+    return int(rng.integers(3)), tuple(int(v) for v in rng.integers(0, N, size=3))
+
+
+def view_slab(arr, y, view=_Z_VIEW):
+    """2D slab of a 3D box at LOS index y under `view` = (axis, shift):
+    the slab perpendicular to `axis` at (y + shift[axis]) % N, with the two
+    remaining axes (in increasing order) periodically shifted. The default
+    view is exactly arr[:, :, y]. Exact -- integer indexing, no interpolation."""
+    axis, shift = view
+    s = np.take(arr, (y + shift[axis]) % arr.shape[axis], axis=axis)
+    o = [k for k in range(3) if k != axis]
+    if shift[o[0]] or shift[o[1]]:
+        s = np.roll(s, (-shift[o[0]], -shift[o[1]]), axis=(0, 1))
+    return s
+
+
 class _Snapshot:
     """Lazy (memmapped) view of one AMBER fields_*.dat dump."""
 
@@ -59,27 +83,29 @@ class _Snapshot:
         self.rho = mm[1:1 + n3].reshape((N, N, N), order='F')
         self.mom = mm[1 + n3:].reshape((3, N, N, N), order='F')
 
-    def slabs(self, y, zre_slab):
-        """(delta, v_z [cm/s], x_HI) float64 slabs at LOS index y, with
-        the SAME conventions as stitch_from_amber._load_amber_snapshots."""
-        rho = np.asarray(self.rho[:, :, y], dtype=np.float32)
-        mz = np.asarray(self.mom[2, :, :, y], dtype=np.float32)
+    def slabs(self, y, zre_slab, view=_Z_VIEW):
+        """(delta, v_los [cm/s], x_HI) float64 slabs at LOS index y, with
+        the SAME conventions as stitch_from_amber._load_amber_snapshots.
+        v_los is the momentum component along view's LOS axis."""
+        rho = np.asarray(view_slab(self.rho, y, view), dtype=np.float32)
+        mz = np.asarray(view_slab(self.mom[view[0]], y, view), dtype=np.float32)
         vz = (np.where(rho > 1e-6, mz / np.where(rho > 1e-6, rho, 1.0), 0.0)
               .astype(np.float32) * KMS_TO_CMS)
         xH = (zre_slab <= self.z).astype(np.float32)
         return (rho.astype(np.float64) - 1.0, vz.astype(np.float64),
                 xH.astype(np.float64))
 
-    def q_slab(self, y, zre_slab):
-        """(q_z = x_HII * mom_z [cm/s], x_HI) float64 slabs -- the SAME
+    def q_slab(self, y, zre_slab, view=_Z_VIEW):
+        """(q_los = x_HII * mom_los [cm/s], x_HI) float64 slabs -- the SAME
         cell-wise q compute_cell's P_qperp is built from
         (qperp_power_from_momentum), no division by rho."""
-        mz = np.asarray(self.mom[2, :, :, y], dtype=np.float64) * KMS_TO_CMS
+        mz = np.asarray(view_slab(self.mom[view[0]], y, view),
+                        dtype=np.float64) * KMS_TO_CMS
         xH = (zre_slab <= self.z).astype(np.float64)
         return (1.0 - xH) * mz, xH
 
-    def rho_slab(self, y):
-        return np.asarray(self.rho[:, :, y], dtype=np.float64)
+    def rho_slab(self, y, view=_Z_VIEW):
+        return np.asarray(view_slab(self.rho, y, view), dtype=np.float64)
 
 
 def open_zre(path, N):
@@ -89,7 +115,7 @@ def open_zre(path, N):
 def stream_ksz_maps(field_files, zre, N, box_len_mpc, z_arr, pos_axis,
                     tau_table, ne0, wrap_cycle_seed, wrap_mode='wrap',
                     xe_min=1.0e-4, xe_max=1.0 - 1.0e-4, progress_every=0,
-                    mode='velocity'):
+                    mode='velocity', geometry='rotate'):
     """
     mode : 'velocity' (default) -- exactly the in-memory stitched path:
            delta, v_z = mom_z/rho and x_HI each blended in z and rotated
@@ -102,6 +128,19 @@ def stream_ksz_maps(field_files, zre, N, box_len_mpc, z_arr, pos_axis,
            neighbour's normal rho. In this mode every progress line also
            reports, for that slice, rms of the velocity-path integrand
            over the momentum-path one and the slab's rho statistics.
+
+    geometry : how successive passes through the periodic box (wrap
+           cycles) are decorrelated, when wrap_cycle_seed is not None:
+           'rotate' (default) -- random in-plane rotation per cycle with
+           bilinear sampling (= stitch_field). Interpolation smooths:
+           measured 0.80 / 0.59 of the unrotated power at ell = 5000 / 8000
+           on the 2 Gpc/h, 1536^3 run.
+           'reorient' -- per cycle, a random box axis becomes the LOS
+           (momentum component along that axis) plus a random integer
+           periodic shift on every axis (reorient_params). Exact, no
+           interpolation; breaks the repeat because each pass samples the
+           box along a different direction and offset.
+           Ignored when wrap_cycle_seed is None (no transformation).
 
     Parameters
     ----------
@@ -134,6 +173,10 @@ def stream_ksz_maps(field_files, zre, N, box_len_mpc, z_arr, pos_axis,
     """
     if mode not in ('velocity', 'momentum'):
         raise ValueError(f"mode must be 'velocity' or 'momentum', got {mode!r}")
+    if geometry not in ('rotate', 'reorient'):
+        raise ValueError(f"geometry must be 'rotate' or 'reorient', got {geometry!r}")
+    reorient = geometry == 'reorient' and wrap_cycle_seed is not None
+    rotate = geometry == 'rotate' and wrap_cycle_seed is not None
     z_arr = np.asarray(z_arr, dtype=float)
     pos_axis = np.asarray(pos_axis, dtype=float)
     cell = box_len_mpc / N
@@ -165,25 +208,31 @@ def stream_ksz_maps(field_files, zre, N, box_len_mpc, z_arr, pos_axis,
         d = pos_axis[n] - pos_axis[0]
         y = int(round(d / cell)) % N
         cyc = int(d // (cell * N))
-        if wrap_cycle_seed is not None and cyc not in coords:
-            coords[cyc] = rotated_coords(N, cycle_angle(cyc, wrap_cycle_seed))
-        ic, jc = coords.get(cyc, (None, None))
+        if cyc not in coords:
+            if rotate:
+                coords[cyc] = rotated_coords(N, cycle_angle(cyc, wrap_cycle_seed))
+            elif reorient:
+                coords[cyc] = reorient_params(cyc, wrap_cycle_seed, N)
+            else:
+                coords[cyc] = None
+        ic, jc = coords[cyc] if rotate else (None, None)
+        view = coords[cyc] if reorient else _Z_VIEW
 
         i0 = int(np.clip(np.searchsorted(sz, z) - 1, 0, sz.size - 2))
         w1 = (z - sz[i0]) / (sz[i0 + 1] - sz[i0])      # extrapolates outside
         w0 = 1.0 - w1
-        zre_slab = np.asarray(zre[:, :, y], dtype=np.float32)
+        zre_slab = np.asarray(view_slab(zre, y, view), dtype=np.float32)
         report = progress_every and (n + 1) % progress_every == 0
         diag = ''
 
         def _rot(f):
-            if wrap_cycle_seed is None:
+            if not rotate:
                 return f
             return map_coordinates(f, [ic, jc], order=1, mode=wrap_mode)
 
         def _vel_integrand():
-            a0 = snaps[i0].slabs(y, zre_slab)
-            a1 = snaps[i0 + 1].slabs(y, zre_slab)
+            a0 = snaps[i0].slabs(y, zre_slab, view)
+            a1 = snaps[i0 + 1].slabs(y, zre_slab, view)
             delta, vz, xH = (_rot(w0 * f0 + w1 * f1) for f0, f1 in zip(a0, a1))
             xHII = 1.0 - xH
             return (1.0 + delta) * xHII * (vz / MPC_CM) / c_Mpc_s * vis[n], xHII
@@ -192,15 +241,15 @@ def stream_ksz_maps(field_files, zre, N, box_len_mpc, z_arr, pos_axis,
             integ, xHII = _vel_integrand()
             xe = float(xHII.mean())
         else:
-            q0, h0 = snaps[i0].q_slab(y, zre_slab)
-            q1, h1 = snaps[i0 + 1].q_slab(y, zre_slab)
+            q0, h0 = snaps[i0].q_slab(y, zre_slab, view)
+            q1, h1 = snaps[i0 + 1].q_slab(y, zre_slab, view)
             integ = _rot(w0 * q0 + w1 * q1) / MPC_CM / c_Mpc_s * vis[n]
             xe = float(1.0 - (w0 * h0 + w1 * h1).mean())
             if report:
                 iv, _ = _vel_integrand()
                 rq = float(np.sqrt(np.mean(integ**2)))
                 rv = float(np.sqrt(np.mean(iv**2)))
-                rho = snaps[i0].rho_slab(y)
+                rho = snaps[i0].rho_slab(y, view)
                 diag = (f"  | rms vel-path/mom-path {rv / rq if rq else np.nan:.3f}"
                         f"  rho min {rho.min():.3g}, frac rho<0.05 "
                         f"{(rho < 0.05).mean():.2e}")

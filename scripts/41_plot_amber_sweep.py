@@ -72,7 +72,8 @@ def _load_lightcone_scenario(d, name):
            for i in range(n)}
 
 
-def _plot_scenario(pts, title, out_path, cmap='viridis', lc_by_label=None):
+def _plot_scenario(pts, title, out_path, cmap='viridis', lc_by_label=None,
+                   lc_method='stitched lightcone + wrap-cycle'):
     lc_by_label = lc_by_label or {}
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     fig, (left, right) = plt.subplots(1, 2, figsize=(12, 5.5))
@@ -89,8 +90,7 @@ def _plot_scenario(pts, title, out_path, cmap='viridis', lc_by_label=None):
             left.loglog(lc_ell, lc_Dl, ':', color=c, lw=1.6, alpha=0.9)
     left.set_xlabel(r'$\ell$')
     left.set_ylabel(r'$D_\ell$  [$\mu$K$^2$]')
-    title_suffix = (', dotted = stitched lightcone + wrap-cycle'
-                    if have_lc else '')
+    title_suffix = (f', dotted = {lc_method}' if have_lc else '')
     left.set_title('patchy kSZ (solid = ours, dashed = AMBER native'
                    f'{title_suffix})')
     left.legend(frameon=False, fontsize=8.5)
@@ -117,6 +117,12 @@ def _plot_scenario(pts, title, out_path, cmap='viridis', lc_by_label=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--run', required=True)
+    ap.add_argument('--lightcone-npz', default=None,
+                    help='stitched-lightcone results to overlay (default '
+                         '<run>/sweep_results_lightcone.npz, scripts/33; '
+                         'scripts/56 writes sweep_results_lightcone_<tag>.npz)')
+    ap.add_argument('--suffix', default='',
+                    help='appended to output plot names, e.g. _momentum_reorient')
     a = ap.parse_args()
 
     npz_path = os.path.join(a.run, 'sweep_results.npz')
@@ -125,7 +131,7 @@ def main():
                          f"scripts/40_run_amber_sweep.py --out-root {a.run} first")
     d = np.load(npz_path)
 
-    lc_npz_path = os.path.join(a.run, 'sweep_results_lightcone.npz')
+    lc_npz_path = a.lightcone_npz or os.path.join(a.run, 'sweep_results_lightcone.npz')
     d_lc = np.load(lc_npz_path) if os.path.exists(lc_npz_path) else None
     print(f"{'found' if d_lc is not None else 'no'} {lc_npz_path}"
           + ('' if d_lc is not None else
@@ -140,6 +146,8 @@ def main():
               f"cosmology={meta.get('cosmology', '?')}"
               if 'L' in meta else '')
     axis_labels = meta.get('axis_labels', {})
+    lc_method = (str(d_lc['method']) if d_lc is not None and 'method' in d_lc.files
+                 else 'stitched lightcone + wrap-cycle')
 
     for i, name in enumerate(_scenario_names(d)):
         pts = _load_scenario(d, name)
@@ -150,8 +158,9 @@ def main():
         lc_by_label = _load_lightcone_scenario(d_lc, name)
         _plot_scenario(
             pts, f"Scenario '{name}': varying {axis_lbl}  ({box_str})",
-            os.path.join('data', 'plots', f'{run_name}_{name}.png'),
-            cmap=CMAPS[i % len(CMAPS)], lc_by_label=lc_by_label)
+            os.path.join('data', 'plots', f'{run_name}_{name}{a.suffix}.png'),
+            cmap=CMAPS[i % len(CMAPS)], lc_by_label=lc_by_label,
+            lc_method=lc_method)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,24 @@
+#!/bin/bash
+#PBS -N amber_sweep_stitched_mom
+#PBS -l nodes=1:ppn=16
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -o /user1/swanith/ksz-pipeline-amber/jobs/amber_sweep_stitched_momentum.log
+
+set -e
+cd /user1/swanith/ksz-pipeline-amber
+source /user1/swanith/miniconda3/etc/profile.d/conda.sh
+conda activate p21c_v3
+
+# Corrected stitched-lightcone curves for the Chen2023 sweep (256^3):
+# momentum stitching (no v = mom/rho), axis re-orientation per box pass
+# (no bilinear rotation), AMBER's own chi(z). Replaces scripts/33's dotted
+# curves; scripts/33's sweep_results_lightcone.npz and the old plots are
+# left untouched. 14 run dirs, ~7.4 box lengths of LOS each; expect a few
+# minutes per point.
+PYTHONPATH=src python -u scripts/56_amber_sweep_stitched_momentum.py \
+    --out-root runs/sweep_chen2023 --mode momentum --geometry reorient
+
+PYTHONPATH=src python -u scripts/41_plot_amber_sweep.py --run runs/sweep_chen2023 \
+    --lightcone-npz runs/sweep_chen2023/sweep_results_lightcone_momentum_reorient.npz \
+    --suffix _momentum_reorient

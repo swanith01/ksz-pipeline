@@ -183,6 +183,7 @@ from ksz_pipeline.ksz.lightcone_integral import compute_ksz_map, ksz_map_to_Dl
 from ksz_pipeline.ksz.coherence_decomposition import (compute_ksz_map_per_slice,
                                                        decompose_p_total_diag_off,
                                                        group_slices_by_snapshot,
+                                                       group_slices_uniform,
                                                        random_shift_slices,
                                                        cross_power_by_dchi)
 from ksz_pipeline.utils.constants import ne0_cgs, MPC_CM
@@ -225,7 +226,7 @@ def _plot_nikolic_band(ax):
 
 def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source,
          wrap_cycle_seed=None, random_seed_override=None, skip_direct=False,
-         wrap_mode='wrap'):
+         wrap_mode='wrap', save_theta_width=None):
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
     sim_cfg = cfg['21cmfast']
@@ -477,6 +478,33 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     print("Grouping thin LOS pixels into per-snapshot slices...")
     theta_grouped, chi_grouped = group_slices_by_snapshot(theta_slices, chi_mid_mpc, z_snapshots)
     print(f"  {theta_slices.shape[-1]} thin LOS pixels -> {theta_grouped.shape[-1]} snapshot groups\n")
+    if save_theta_width is not None:
+        # ADDED 27 Oct 2026 (Limber-scope test, script 45): save the per-slice
+        # kSZ maps summed into UNIFORM comoving-distance groups of width
+        # ~save_theta_width Mpc (plus the snapshot groups above), so the
+        # l-resolved, Delta-chi-resolved cross-power can be analysed offline
+        # without py21cmfast. Default None -> nothing saved, behaviour and
+        # outputs unchanged.
+        span = float(chi_mid_mpc.max() - chi_mid_mpc.min())
+        n_uni = max(int(np.ceil(span / float(save_theta_width))), 2)
+        theta_uni, chi_uni = group_slices_uniform(theta_slices, chi_mid_mpc, n_uni)
+        theta_path = f"{out_dir}/theta_groups{tag_suffix or '_fiducial'}.npz"
+        np.savez(theta_path,
+                 theta_uniform=theta_uni.astype(np.float32), chi_uniform=chi_uni,
+                 theta_snapshot=theta_grouped.astype(np.float32), chi_snapshot=chi_grouped,
+                 group_width_mpc=span / n_uni,
+                 box_len=BOX_LEN, hii_dim=HII_DIM, source=source,
+                 wrap_cycle_seed=wrap_cycle_seed if (wrap_cycle_seed is not None and source == 'coeval') else -1,
+                 random_seed=stitched_random_seed,
+                 chi_eff=chi_eff, z_lo=z_lo, z_hi=z_hi,
+                 ell_direct=ell_direct, Dl_direct=Dl_direct,
+                 direct_is_fresh=bool(not skip_direct and not
+                                      ((is_fiducial_config and not astro_overridden)
+                                       or source == 'native')))
+        print(f"Saved per-slice kSZ maps in {n_uni} uniform groups "
+              f"(~{span / n_uni:.1f} Mpc wide) -> {theta_path}\n")
+        del theta_uni
+
     del theta_slices  # free the large thin-pixel array, no longer needed
 
     # ================================================================
@@ -664,6 +692,13 @@ if __name__ == "__main__":
                               "the correct period n. Only matters with --wrap-cycle-seed. "
                               "Non-default output files get a _gridwrap tag, so they "
                               "never overwrite the default-mode ones.")
+    parser.add_argument("--save-theta-width", type=float, default=None,
+                         help="ADDED 27 Oct 2026: also save the per-slice kSZ maps "
+                              "summed into uniform comoving groups of about this "
+                              "width [Mpc] to <output_dir>/theta_groups<tag>.npz, for "
+                              "scripts/45_limber_scope_dchi.py. Default None saves "
+                              "nothing (existing behaviour unchanged).")
     args = parser.parse_args()
     main(args.config, args.shift_seed, args.box_len, args.hii_dim, args.source,
-         args.wrap_cycle_seed, args.random_seed, args.skip_direct, args.wrap_mode)
+         args.wrap_cycle_seed, args.random_seed, args.skip_direct, args.wrap_mode,
+         args.save_theta_width)

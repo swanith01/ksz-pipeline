@@ -16,6 +16,25 @@ authoritative statement of it):
     z_arr      : ndarray             redshift per slice
     pos_axis   : ndarray             comoving distance [Mpc] per slice
 
+*** FIXED 27 Oct 2026 -- BOTH conversions below were wrong; measured, not
+assumed, by scripts/39_native_lightcone_viz.py (400 Mpc / 64^3, seed 37):
+  * DENSITY: raw run_lightcone().density is ALREADY raw delta (global mean
+    +0.000, min -0.58, std falling with z), in v3.3.1 and v4.1 alike. The old
+    "-1.0" turned it into delta-1, so script 17's density_1plus = 1 + density
+    became delta itself and q = x_e (1+delta) v lost its leading term. The
+    "(1+delta)" statement quoted below came from the skewed_los.py rotation
+    path, not from raw run_lightcone() output.
+  * VELOCITY: raw lightcone.velocity (v3) / velocity_z (v4) is the comoving-
+    coordinate rate dx/dt in Mpc/s. Regressed against the linear peculiar
+    velocity predicted from the lightcone's own density, raw*MPC_KM/(1+z)
+    matches it with A*g = 0.995-0.998 and spread 1.01 over z = 5-12 (corr
+    +1.00), for v3 and v4. The old raw/H0 gave 0.12x at z~8, z-dependent.
+    So v_pec = raw / (1+z) [Mpc/s]; this is the same convention as the
+    ksz-lae-xcorr finding for v4 coeval velocity_z.
+  Consequence: every native-source kSZ number before 27 Oct 2026 (script 01's
+  excess, script 17/20 --source native amplitudes) used wrong fields.
+  The historical notes on both points below are kept for the record only.
+
 Two conversions are needed to reach that contract from what run_lightcone()
 natively returns, and they carry very different levels of confidence:
 
@@ -153,16 +172,81 @@ def stitch_lightcone_native(z_min, z_max, HII_DIM, BOX_LEN, cache_dir,
     z_arr = red_axis_full[keep]
     pos_axis = pos_axis_full[keep]
 
-    # -- density: see module docstring point 1 --
-    density = np.asarray(lightcone.density, dtype=np.float32)[:, :, keep] - 1.0
+    # -- density: raw run_lightcone() density is already raw delta (FIXED
+    #    27 Oct 2026, see module docstring) -- no "-1.0" --
+    density = np.asarray(lightcone.density, dtype=np.float32)[:, :, keep]
 
     # -- xH_box: no conversion needed --
     xH_box = np.asarray(lightcone.xH_box, dtype=np.float32)[:, :, keep]
 
-    # -- velocity: see module docstring point 2 --
-    H0_km_s_Mpc = float(cosmo.H0.value)
-    v_los_Mpc_s = np.asarray(lightcone.velocity, dtype=np.float32)[:, :, keep] / H0_km_s_Mpc
+    # -- velocity: raw is dx/dt [Mpc/s]; v_pec = raw/(1+z) (FIXED 27 Oct 2026,
+    #    measured by script 39 -- see module docstring) --
+    v_los_Mpc_s = (np.asarray(lightcone.velocity, dtype=np.float32)[:, :, keep]
+                   / (1.0 + z_arr)[None, None, :].astype(np.float32))
     velocity_z = v_los_Mpc_s * MPC_CM   # -> cm/s, matching the shared contract
 
     return dict(density=density, xH_box=xH_box, velocity_z=velocity_z,
                 z_arr=z_arr, pos_axis=pos_axis)
+
+
+def stitch_lightcone_native_v4(z_min, z_max, HII_DIM, BOX_LEN, cache_dir,
+                               N_THREADS=None, random_seed=None,
+                               HII_EFF_FACTOR=None, geometry="rect", n_nodes=30):
+    """
+    ADDED 27 Oct 2026. Native py21cmfast v4.1 lightcone (needs the v4 env,
+    e.g. p21c_v41), returned in the SAME contract as stitch_lightcone_native /
+    stitch_lightcone_from_coeval, so script 17 runs on it unchanged.
+
+    geometry : "rect"  -- RectilinearLightconer (box-aligned transverse grid)
+               "ang"   -- AngularLightconer.like_rectilinear(match_at_z=z_min):
+                          HII_DIM x HII_DIM pixels of angular size
+                          pix_angle = (BOX_LEN/HII_DIM) / chi(z_min) [rad].
+                          Pixel ordering: the C-order reshape in
+                          lightcone_v4._reshape_angular_fields was checked by
+                          script 39 (identity orientation best, corr +0.67
+                          density / +0.86 velocity vs the rectilinear face;
+                          every other orientation ~0).
+
+    Units (measured by script 39, see module docstring): density is raw
+    delta; velocity_z is dx/dt in Mpc/s -> v_pec = velocity_z/(1+z).
+    For "ang", velocity_z is the box-z component, not the radial n.v; within
+    a like_rectilinear patch (half-width ~ few deg) the difference is
+    < 1% (cos 4 deg = 0.998). A full-sky angular lightcone would need the
+    true LOS velocity.
+
+    Returns
+    -------
+    dict with density, xH_box, velocity_z [cm/s], z_arr (ascending),
+    pos_axis [Mpc], and pix_angle [rad] (0.0 for "rect").
+    """
+    from .lightcone_v4 import (build_inputs, build_node_redshifts,
+                               run_rectilinear, run_angular)
+    node_z = build_node_redshifts(z_min, z_max, n_nodes=n_nodes)
+    inputs = build_inputs(random_seed, HII_DIM, BOX_LEN, node_z,
+                          HII_EFF_FACTOR=HII_EFF_FACTOR,
+                          N_THREADS=int(N_THREADS) if N_THREADS else 1)
+    q = ("density", "velocity_z", "neutral_fraction")
+    if geometry == "rect":
+        lc, f = run_rectilinear(inputs, z_min, z_max, cache_dir, quantities=q)
+        pix_angle = 0.0
+    elif geometry == "ang":
+        lc, f = run_angular(inputs, z_min, z_min, z_max, cache_dir, quantities=q)
+        pix_angle = float((BOX_LEN / HII_DIM) / cosmo.comoving_distance(z_min).value)
+    else:
+        raise ValueError(f"geometry must be 'rect' or 'ang', got {geometry!r}")
+
+    z_all = np.asarray(lc.lightcone_redshifts, dtype=float)
+    chi_all = np.asarray(lc.lightcone_distances, dtype=float)
+    order = np.argsort(z_all)
+    order = order[z_all[order] <= float(z_max)]
+    z_arr, pos_axis = z_all[order], chi_all[order]
+    density = np.asarray(f["density"], dtype=np.float32)[..., order]
+    xH_box = np.asarray(f["neutral_fraction"], dtype=np.float32)[..., order]
+    v_los_Mpc_s = (np.asarray(f["velocity_z"], dtype=np.float32)[..., order]
+                   / (1.0 + z_arr)[None, None, :].astype(np.float32))
+    print(f"  [native_v4:{geometry}] {density.shape}, z {z_arr.min():.2f}-{z_arr.max():.2f}, "
+          f"mean delta {float(density.mean()):+.4f}, "
+          f"v_pec rms {float(np.sqrt(np.mean(v_los_Mpc_s.astype(np.float64)**2))) * MPC_CM / 1e5:.1f} km/s"
+          + (f", pix_angle {pix_angle * 180 / np.pi * 60:.3f} arcmin" if pix_angle else ""))
+    return dict(density=density, xH_box=xH_box, velocity_z=v_los_Mpc_s * MPC_CM,
+                z_arr=z_arr, pos_axis=pos_axis, pix_angle=pix_angle)

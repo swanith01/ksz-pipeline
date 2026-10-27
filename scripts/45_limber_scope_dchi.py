@@ -59,14 +59,28 @@ def kind_of(d):
     src = str(d["source"])
     if src == "coeval":
         return "stitched, wrap-cycle" if int(d["wrap_cycle_seed"]) >= 0 else "stitched, no rotation"
-    if src == "native":
-        return "native v3 rectilinear"
-    return src
+    return {"native": "native v3 rectilinear", "native_v4": "native v4 rectilinear",
+            "native_v4_ang": "native v4 angular"}.get(src, src)
 
 
-def pair_spectra(theta, L, chi_eff, n_kbins=35):
+def taper2d(N, alpha=0.25):
+    """Separable Tukey (cosine-edge) window, used for non-periodic angular patches."""
+    x = np.arange(N) / (N - 1)
+    w = np.ones(N)
+    e = alpha / 2
+    lo, hi = x < e, x > 1 - e
+    w[lo] = 0.5 * (1 - np.cos(np.pi * x[lo] / e))
+    w[hi] = 0.5 * (1 - np.cos(np.pi * (1 - x[hi]) / e))
+    return np.outer(w, w)
+
+
+def pair_spectra(theta, L, chi_eff, n_kbins=35, taper=False):
     """
     Same binning/normalisation as decompose_p_total_diag_off.
+    L is the transverse map length used for ell = k*chi_eff: the box face for
+    rectilinear maps, N*pix_angle*chi_eff for angular ones (script 17 saves it
+    as map_len). taper=True apodises the (non-periodic) angular patch with a
+    Tukey window and divides the power by mean(w^2).
     Returns ell (valid), Dauto[G, nl], Dpair[G, G, nl] (upper triangle i<j filled,
     already including the factor 2 for (i,j)+(j,i)).
     """
@@ -75,8 +89,12 @@ def pair_spectra(theta, L, chi_eff, n_kbins=35):
     pix = L / N
     th = theta.astype(np.float64)
     th = th - th.mean(axis=(0, 1), keepdims=True)
-    that = np.fft.fft2(th, axes=(0, 1))
     norm = (pix / N) ** 2
+    if taper:
+        w = taper2d(N)
+        th = th * w[:, :, None]
+        norm = norm / float(np.mean(w ** 2))
+    that = np.fft.fft2(th, axes=(0, 1))
     dk = 2.0 * np.pi / (N * pix)
     k1 = np.fft.fftfreq(N) * N * dk
     kg = np.sqrt(k1[:, None] ** 2 + k1[None, :] ** 2)
@@ -109,8 +127,11 @@ def pair_spectra(theta, L, chi_eff, n_kbins=35):
 def analyse(path):
     d = dict(np.load(path, allow_pickle=True))
     L = float(d["box_len"]); chi_eff = float(d["chi_eff"])
+    pix_angle = float(d["pix_angle"]) if "pix_angle" in d else 0.0
+    Lmap = float(d["map_len"]) if "map_len" in d else L
+    ang = pix_angle > 0
     th, chi = d["theta_uniform"], d["chi_uniform"]
-    ell, Dauto, Dpair = pair_spectra(th, L, chi_eff)
+    ell, Dauto, Dpair = pair_spectra(th, Lmap, chi_eff, taper=ang)
     G = len(chi)
     iu, ju = np.triu_indices(G, k=1)
     dchi = np.abs(chi[iu] - chi[ju])
@@ -127,7 +148,7 @@ def analyse(path):
     out["D_trunc"] = out["D_diag"] + out["D_near"]
     # internal check: total power is grouping-invariant -> compare with snapshot groups
     if "theta_snapshot" in d:
-        e2, a2, p2 = pair_spectra(d["theta_snapshot"], L, chi_eff)
+        e2, a2, p2 = pair_spectra(d["theta_snapshot"], Lmap, chi_eff, taper=ang)
         tot2 = a2.sum(0) + p2.sum((0, 1))
         rel = np.nanmax(np.abs(tot2 - out["D_total"]) / np.abs(out["D_total"]))
         print(f"[check] {os.path.basename(path)}: D_total uniform vs snapshot grouping, "
@@ -241,6 +262,43 @@ def main(a):
             ax.legend(frameon=False, fontsize=7)
     fig.savefig(os.path.join(a.out, "limber_scope_dchi.png"), dpi=150)
     plt.close(fig)
+
+    # -------- figure 3: cross-power vs separation, normalised to each lightcone's OWN diag
+    # (needed for lightcones from a different realisation/astro model, e.g. v4) --------
+    fig, axs = plt.subplots(len(bands), len(boxes), figsize=(5.2 * len(boxes), 3.4 * len(bands)),
+                            squeeze=False, constrained_layout=True)
+    for c, L in enumerate(boxes):
+        for b, (lo, hi) in enumerate(bands):
+            ax = axs[b, c]
+            for r in [r for r in results if r["L"] == L]:
+                x = r["dchi"] / L
+                bw = max(r["width"] / L, 0.05)
+                edges = np.arange(0, x.max() + bw, bw)
+                pb = band(r["ell"], r["Dpairs"], lo, hi)
+                own = band(r["ell"], r["D_diag"], lo, hi)
+                s = np.array([pb[(x >= edges[k]) & (x < edges[k + 1])].sum()
+                              for k in range(len(edges) - 1)]) / own
+                ax.step(0.5 * (edges[:-1] + edges[1:]), s, where="mid",
+                        color=COLORS.get(r["kind"], "0.4"), lw=1.5, label=r["kind"])
+            ax.axvspan(0, 0.5, color="0.92", zorder=0)
+            for k in range(1, int(np.ceil(max(r["dchi"].max() for r in results) / L)) + 1):
+                ax.axvline(k, color="0.5", ls=":", lw=1)
+            ax.axhline(0, color="k", lw=0.8)
+            ax.set_title(f"L = {L:.0f} Mpc, ℓ = {int(lo)}–{int(hi)}")
+            ax.set_xlabel(r"$|\Delta\chi| / L_{\rm box}$")
+            ax.set_ylabel("cross-power / own D_diag")
+            ax.legend(frameon=False, fontsize=7)
+    fig.savefig(os.path.join(a.out, "limber_scope_dchi_selfnorm.png"), dpi=150)
+    plt.close(fig)
+
+    print(f"\n{'lightcone':26s} {'L':>5s} {'band':>11s} {'far/total':>9s} {'near/diag':>9s}"
+          "   (internal ratios: independent of velocity units and of the Limber reference)")
+    for r in results:
+        for lo, hi in bands:
+            tot, far = band(r["ell"], r["D_total"], lo, hi), band(r["ell"], r["D_far"], lo, hi)
+            near, diag = band(r["ell"], r["D_near"], lo, hi), band(r["ell"], r["D_diag"], lo, hi)
+            print(f"{r['kind']:26s} {r['L']:5.0f} {int(lo):5d}-{int(hi):<5d} "
+                  f"{far / tot:9.2f} {near / diag:9.2f}")
 
     np.savez(os.path.join(a.out, "limber_scope.npz"),
              **{f"{i}__{k}": np.asarray(r[k]) for i, r in enumerate(results)

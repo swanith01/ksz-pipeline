@@ -176,7 +176,7 @@ import matplotlib.pyplot as plt
 
 from ksz_pipeline.ksz.stitch_from_coeval import (stitch_lightcone_from_coeval, build_los_z_grid,
                                                   wrap_cycle_index, cycle_angle)
-from ksz_pipeline.ksz.native_lightcone import stitch_lightcone_native
+from ksz_pipeline.ksz.native_lightcone import stitch_lightcone_native, stitch_lightcone_native_v4
 from ksz_pipeline.ksz.optical_depth import (compute_tau, compute_visibility,
                                              analytic_tau_below, compute_patchy_mask)
 from ksz_pipeline.ksz.lightcone_integral import compute_ksz_map, ksz_map_to_Dl
@@ -262,8 +262,9 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
                              else sim_cfg['random_seed'])
 
     tag_suffix = "" if is_fiducial_config else f"_box{int(BOX_LEN)}"
-    if source == 'native':
-        tag_suffix += "_native"
+    if source.startswith('native'):
+        tag_suffix += {"native": "_native", "native_v4": "_nativev4",
+                       "native_v4_ang": "_nativev4ang"}[source]
     if wrap_cycle_seed is not None and source == 'coeval':
         tag_suffix += f"_wrapcycle{wrap_cycle_seed}"
         if wrap_mode != 'wrap':
@@ -303,13 +304,16 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
               f"ensemble/batch mode. Run once without this flag to get the reference shared "
               f"across the whole batch (depends only on BOX_LEN/HII_DIM/astro_params, not on "
               f"wrap_cycle_seed or --random-seed).")
-    if source == 'native':
-        print("CAVEAT: velocity amplitude not independently validated for the native "
-              "path -- see native_lightcone.py's docstring. Fine for the Delta-chi "
-              "SHAPE test below; do not read absolute D_3000/cross-power values as "
-              "validated. The 'direct' reference plotted is ALWAYS closure_test.npz's "
-              "fiducial-coeval value regardless of this run's own box_len/hii_dim -- "
-              "a rough anchor only, see module docstring.")
+    if source.startswith('native'):
+        print("NOTE (27 Oct 2026): native density/velocity units are now MEASURED "
+              "(script 39) and fixed in native_lightcone.py. The 'direct' reference "
+              "plotted here is still closure_test.npz's fiducial-coeval value regardless "
+              "of this run's box_len/hii_dim -- a rough anchor only; script 45 picks the "
+              "same-box coeval-direct from a --source coeval run instead."
+              + (" v4 sources use py21cmfast 4.1's own initial conditions and astro "
+                 "model, so they are a different realisation from the v3 coeval boxes; "
+                 "compare them through internal ratios (far/total, near/diag)."
+                 if source.startswith('native_v4') else ""))
         if wrap_cycle_seed is not None:
             print(f"WARNING: --wrap-cycle-seed={wrap_cycle_seed} was passed but "
                   f"stitch_lightcone_native has no such parameter -- IGNORED. This "
@@ -327,7 +331,7 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
 
     if skip_direct:
         ell_direct, Dl_direct = np.array([]), np.array([])
-    elif (is_fiducial_config and not astro_overridden) or source == 'native':
+    elif (is_fiducial_config and not astro_overridden) or source.startswith('native'):
         # Reuse script 14's own trusted direct curve directly. For native at a
         # box-size override this is ALSO the fallback (see module docstring --
         # no native equivalent of coeval_sweep.run_one_config exists or is
@@ -413,12 +417,31 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
             cycle_angles_deg = np.array([cycle_angle(int(c), wrap_cycle_seed) for c in cycle_ids])
             print("  per-cycle rotation angles [deg]: " +
                   ", ".join(f"{int(c)}:{a:.4f}" for c, a in zip(cycle_ids, cycle_angles_deg)))
-    else:  # source == 'native'
+    elif source == 'native':
         print("Building NATIVE lightcone via py21cmfast's own run_lightcone()...")
         stitched = stitch_lightcone_native(
             z_min=z_min, z_max=z_max, HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
             cache_dir=cache_dir, angle_deg=0.0,
             N_THREADS=sim_cfg['N_THREADS'], random_seed=stitched_random_seed)
+    else:  # native_v4 / native_v4_ang -- needs the py21cmfast 4.1 env
+        geom = "ang" if source == "native_v4_ang" else "rect"
+        print(f"Building NATIVE py21cmfast v4 lightcone ({geom})...")
+        stitched = stitch_lightcone_native_v4(
+            z_min=z_min, z_max=z_max, HII_DIM=HII_DIM, BOX_LEN=BOX_LEN,
+            cache_dir=cache_dir.rstrip('/') + '_v4', N_THREADS=sim_cfg['N_THREADS'],
+            random_seed=stitched_random_seed,
+            HII_EFF_FACTOR=sim_cfg.get('HII_EFF_FACTOR'), geometry=geom)
+
+    # Transverse size used to turn map FFTs into ell: the physical box face for
+    # rectilinear maps; for an ANGULAR map, N * pix_angle * chi_eff, so that
+    # ell = k * chi_eff equals the angular wavenumber 2*pi*f/pix_angle exactly.
+    pix_angle = float(stitched.get('pix_angle', 0.0))
+    MAP_LEN = HII_DIM * pix_angle * chi_eff if pix_angle > 0 else BOX_LEN
+    if pix_angle > 0:
+        print(f"  angular map: pix_angle={pix_angle * 180 / np.pi * 60:.3f} arcmin, "
+              f"effective map length {MAP_LEN:.1f} Mpc at chi_eff (box L={BOX_LEN:.0f} Mpc). "
+              f"Script 17's own spectra below are NOT apodised; script 45 tapers the "
+              f"angular patch edges.")
 
     density_1plus = 1.0 + stitched['density']
     x_HII_field   = 1.0 - stitched['xH_box']
@@ -500,7 +523,8 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
                  ell_direct=ell_direct, Dl_direct=Dl_direct,
                  direct_is_fresh=bool(not skip_direct and not
                                       ((is_fiducial_config and not astro_overridden)
-                                       or source == 'native')))
+                                       or source.startswith('native'))),
+                 pix_angle=pix_angle, map_len=MAP_LEN)
         print(f"Saved per-slice kSZ maps in {n_uni} uniform groups "
               f"(~{span / n_uni:.1f} Mpc wide) -> {theta_path}\n")
         del theta_uni
@@ -511,7 +535,7 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     # UNSHIFTED decomposition -- the actual stage-1 test
     # ================================================================
     ell_dec, Dl_total, Dl_diag, Dl_off = decompose_p_total_diag_off(
-        theta_grouped, BOX_LEN, chi_eff)
+        theta_grouped, MAP_LEN, chi_eff)
     d3000_total = float(np.interp(3000, ell_dec, Dl_total))
     d3000_diag  = float(np.interp(3000, ell_dec, Dl_diag))
     d3000_off   = float(np.interp(3000, ell_dec, Dl_off))
@@ -527,8 +551,8 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     else:
         frac_diff = abs(d3000_diag - d3000_direct) / d3000_direct
         print(f"\n|P_diag - direct| / direct = {frac_diff:.1%}")
-        if source == 'native':
-            print(">>> --source native: this comparison uses closure_test.npz's "
+        if source.startswith('native'):
+            print(">>> --source native*: this comparison uses closure_test.npz's "
                   "coeval-derived direct value as a rough anchor only (see module "
                   "docstring) -- a large fraction here is EXPECTED given the "
                   "unvalidated velocity amplitude, not necessarily a problem. "
@@ -551,7 +575,7 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     print(f"\nRunning periodicity control (random shift, seed={seed_for_shift})...")
     theta_shifted = random_shift_slices(theta_grouped, seed=seed_for_shift)
     ell_shift, Dl_total_shift, Dl_diag_shift, Dl_off_shift = decompose_p_total_diag_off(
-        theta_shifted, BOX_LEN, chi_eff)
+        theta_shifted, MAP_LEN, chi_eff)
 
     d3000_diag_shift = float(np.interp(3000, ell_shift, Dl_diag_shift))
     d3000_off_shift  = float(np.interp(3000, ell_shift, Dl_off_shift))
@@ -567,8 +591,8 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
     # Delta-chi binned cross-power, unshifted vs shifted
     # ================================================================
     print("\nComputing Delta-chi binned cross-power (unshifted and shifted)...")
-    dchi_c, cross_mean, cross_std, n_pairs = cross_power_by_dchi(theta_grouped, chi_grouped, BOX_LEN)
-    dchi_c_s, cross_mean_s, cross_std_s, n_pairs_s = cross_power_by_dchi(theta_shifted, chi_grouped, BOX_LEN)
+    dchi_c, cross_mean, cross_std, n_pairs = cross_power_by_dchi(theta_grouped, chi_grouped, MAP_LEN)
+    dchi_c_s, cross_mean_s, cross_std_s, n_pairs_s = cross_power_by_dchi(theta_shifted, chi_grouped, MAP_LEN)
 
     print(f"{'dchi [Mpc]':>12} {'unshifted':>16} {'shifted':>16} {'n_pairs':>10}")
     for i in range(len(dchi_c)):
@@ -586,7 +610,7 @@ def main(config_path, seed_for_shift, box_len_override, hii_dim_override, source
         direct_label = 'coeval-direct (fresh, Nikolic astro params)'
     if not skip_direct:
         ax1.plot(ell_direct, Dl_direct, 'k-', lw=2, label=direct_label)
-    src_word = "stitched" if source == "coeval" else "native"
+    src_word = "stitched" if source == "coeval" else source
     wc_tag = f", wrap_cycle_seed={wrap_cycle_seed}" if (wrap_cycle_seed is not None and source == 'coeval') else ""
     ax1.plot(ell_dec, Dl_diag, color='tab:blue', lw=2, ls='--',
              label=f'{src_word} P_diag (grouped, unshifted{wc_tag})')
@@ -664,7 +688,8 @@ if __name__ == "__main__":
                               "fiducial is 800/512, same dx=1.5625 Mpc)")
     parser.add_argument("--hii-dim", type=int, default=None,
                          help="Override HII_DIM -- see --box-len")
-    parser.add_argument("--source", choices=["coeval", "native"], default="coeval",
+    parser.add_argument("--source", choices=["coeval", "native", "native_v4", "native_v4_ang"],
+                         default="coeval",
                          help="lightcone data source; default preserves existing "
                               "behaviour exactly")
     parser.add_argument("--wrap-cycle-seed", type=int, default=None,

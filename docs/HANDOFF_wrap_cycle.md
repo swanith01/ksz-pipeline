@@ -1,7 +1,10 @@
 # Handoff: wrap-cycle lightcone stitching (ksz-pipeline → ksz-lae-xcorr)
 
 Source branch: `main` (NOT `amber-integration`, which predates the fix and has
-no `wrap_cycle` code). Built from commit `0c3b578`
+no `wrap_cycle` code).
+*(Update 2026-10-27: no longer true — `amber-integration` has had the
+wrap-cycle code since this doc was ported there, and for AMBER it is
+superseded by `stream_lightcone`'s axis re-orientation; see README.)* Built from commit `0c3b578`
 ("oct5: simple two-panel Nikolic comparison figure"). The wrap-cycle code itself
 was added in `41157a5` ("add per-wrap-cycle rotation (wrap_cycle_seed),
 additive only"); `323ef1e` added `astro_params`/`flag_options` passthrough.

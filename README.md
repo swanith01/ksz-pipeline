@@ -79,91 +79,161 @@ Results land in `data/products/*.npz`. Plot them with
 
 ---
 
-## AMBER cross-check — progress (updated 2026-10-02)
+## AMBER (`amber-integration` branch) — status as of 2026-10-27
 
-AMBER (github.com/hytrac/amber) is used as an independent, semi-numerical
-check on this repo's own kSZ methods — see `docs/amber_integration.md`
-for the full technical conventions/unit-mapping writeup. Summary of
-where this stands:
+AMBER (github.com/hytrac/amber) supplies simulation **fields only**; every
+kSZ method (`compute_cell`, `qperp_power`, the stitched lightcone) is this
+repo's own code, so changes across a reionization-history sweep are changes
+in the input, never in the method. Full conventions and unit mapping:
+`docs/amber_integration.md` (build, conventions, validation gate, HEALPix
+lightcone status).
 
-**Done and trusted:**
+### Quick reference
 
-- Field-dump patch (`external/amber_patch/0001-...patch`) + adapter
-  (`src/ksz_pipeline/amber/`) let AMBER's fields feed straight into this
-  repo's own `compute_cell`/`qperp_power` — see the validation gate
-  results table in `docs/amber_integration.md`. No admin rights needed;
-  `build_amber.sh` clones, patches and builds AMBER against ifort+MKL.
-- **Chen et al. (2023) Fig. 10 reproduction + a 256³ (z_mid, Δz) sweep**
-  are done and committed (`scripts/40_run_amber_sweep.py` /
-  `41_plot_amber_sweep.py`, plot in `data/plots/26Sep-amber/`).
-- **AMBER's native ray-traced lightcone (`Map=write`, real HEALPix
-  build) now actually runs**, not just builds — confirmed on swarm
-  2026-09-26 at N=128/Nside=128: produces real `cl_ksz_healpix.txt`/
-  `cl_kappa_healpix.txt`/`cl_tau_healpix.txt` and FITS maps, cross-checked
-  against an independent `healpy.anafast` on the map itself (agreement
-  to ~0.1–10%, worse only near the map's own `lmax`, as expected from
-  AMBER's `Nlmax=3·Nside` convention).
-- **Overlay: AMBER's native map-based C_ℓ vs. its own Limber-from-
-  P_qperp C_ℓ, same realization.** Shows real excess power at low–mid ℓ
-  (ratio ~1.2–144× across ℓ=100–384), converging toward the Limber value
-  near the map's ℓ_max. Consistent with either known Limber breakdown at
-  low ℓ or AMBER's angular periodicity (the box is tiled repeatedly
-  across the sky at fixed shell radius, confirmed by reading `map_make`'s
-  plain-modulo wrapping in `cmbreion.f90` — no derandomizing rotation
-  between periodic copies). Not distinguishable from a single map alone.
-- **2 Gpc/h, N=1536 fiducial-point run (Chen+23 fiducial: z_mid=8,
-  Δz=4, A_z=3, M_h=1e8 M_sun, λ_mfp=3 Mpc/h), full 28-shell history
-  (z=4.5–18.5), `Map=no`, completed successfully 2026-10-01** (~1h14m
-  runtime once running). Confirms **2048³ is infeasible on this
-  cluster** — no node has enough RAM — so 1536³ (dx≈1.30 Mpc/h/cell) is
-  used instead; this is already reflected in the commit history.
-  Produced the Limber-side products (`cl_kappa.txt`, `cl_tau.txt`,
-  `cl_ksz.txt`, 28× `power_z=*.txt`, `tau.txt`) cleanly; separately
-  validated with `scripts/30_amber_validation_gate.py` run as its own
-  lightweight follow-up job (see caveat below).
+```bash
+bash external/amber_patch/build_amber.sh            # clone + patch + build -> ~/amber/src/amber.x
+python scripts/make_amber_input.py --out runs/X --L 256 --N 256 \
+       --zmid 8 --zdel 4 --zasy 3 --cosmology chen2022
+(cd runs/X && mkdir -p output/{cosmo,reion,grf,lpt,esf,mesh,cmb} \
+       && ~/amber/src/amber.x < input/input.txt > output/log.txt)   # via PBS for real sizes
+python scripts/30_amber_validation_gate.py --run runs/X     # always, per new config
+```
 
-**Explicitly shelved (a scope decision, not a blocker):**
+### What is trusted (and how well)
 
-- The angular D_diag/D_off cross-shell-coherence decomposition — i.e.
-  measuring whether AMBER's angular periodicity shows up as coherent
-  cross-shell power in its native lightcone — would need a second
-  Fortran patch (`0002-dump-shell-ksz-maps.patch`, stacked on `0001`) to
-  dump AMBER's per-shell HEALPix maps, which stock AMBER never writes.
-  That patch plus the full angular-harmonics decomposition module were
-  drafted and validated against synthetic HEALPix data, but **are not
-  deployed**. Decision made 2026-09-29: not worth the additional
-  source-patching + time commitment right now, given the advisor's
-  priority to move on to the kSZ–LAE work. Revisit only if explicitly
-  re-raised.
+| Result | Where | Agreement |
+|---|---|---|
+| Our D_coeval/Limber vs AMBER's own Limber, same fields | `scripts/30` (gate), `scripts/53`, `scripts/54` | ≤0.2% over ℓ=1000–8000 (2 Gpc/h, 1536³) |
+| Ours vs **Chen+23 Fig. 10 fiducial**, matched z=5–30 | `scripts/54`, `data/plots/26Oct-amber/` | 1.0% at ℓ=3000; 1–3% over ℓ=2000–8000 (8% at ℓ=1000, where the digitized curve is coarse) |
+| **Stitched lightcone vs Limber**, 2 Gpc/h (LOS = 0.98 box) | `scripts/55`, `data/plots/26Oct-amber/` | total 0.97–0.98, patchy 1.01–1.04 over ℓ=1000–8000 |
+| Corrected stitched curves for the 256³ Chen+23 sweep | `scripts/56`, job 58, `data/plots/27Oct-amber/` | dotted curves now sensible (see below) |
 
-**Operational lessons from the 2 Gpc/h run (useful for any future AMBER
-PBS job on this cluster):**
+Tag **`dcoeval-limber-validated-2026-10-26`** (commit `3edacfb`) marks the
+Chen+23-matched validation; it replaces the earlier `…-2026-10-14` tag.
 
-- `set -u` (nounset) must be turned on **after** sourcing Intel's
-  `setvars.sh`, never before — that script isn't nounset-safe. (Same
-  rule `build_amber.sh` already follows; a new PBS script missed it.)
-- A relative `-o`/working-directory path is resolved against
-  `$PBS_O_WORKDIR`, which is wherever `qsub` was run **from**, not where
-  the `.pbs` script file lives — always `cd` into the repo root
-  immediately before `qsub`, even when giving the script an absolute
-  path.
-- A PBS batch job does **not** inherit the submitting shell's conda
-  activation — `python` is not on `PATH` by default inside the job.
-  Explicitly `source .../conda.sh && conda activate <env>` inside the
-  script, before `set -u`.
-- Running `scripts/30_amber_validation_gate.py` **chained immediately
-  after** `amber.x` inside the same job can get OOM-killed (`exit 137`)
-  even though the gate script itself only reads small files (`tau.txt`,
-  `amber_run.json`) — the preceding run's ~1.6 TB of `fields_z=*.dat`
-  writes leave lingering page-cache pressure against the job's memory
-  cgroup. Run the gate as its own small, separate job (or interactively)
-  after the main run finishes instead.
+### Findings, in order (what changed and why)
 
-**Storage flag:** one fiducial point at N=1536 wrote **~1.6 TB** of raw
-per-shell `fields_z=*.dat` dumps. Running the remaining 15 Chen+23 sweep
-points at this resolution would need **~25 TB** total if those raw dumps
-are all kept — worth deciding a retention policy (e.g. keep only
-`power_z=*.txt`/`cl_*.txt` long-term) before that sweep is launched.
+1. **Pruned raw fields are safely regenerable.** All 14
+   `runs/sweep_chen2023` points had lost their `fields_*.dat`. Re-running
+   `amber.x` from the preserved `input/input.txt` (seed 1, never overridden)
+   reproduced `tau.txt`, `cl_tau.txt`, `cl_kappa.txt` byte-identically and
+   `cl_ksz.txt` to ~1e-7 (float summation order). Jobs 34 (verify one point)
+   and 35 (regenerate the rest).
+
+2. **Chen+23's curve includes post-reionization kSZ (2026-10-26).** Their
+   Sec. 5.2: spectra "integrated from z=5 to z=30". Our gate only covered the
+   patchy window (z≈7.25–14.25 for the fiducial). Adding the fully ionized
+   shells down to z=5 (`compute_cell(..., post_eor_zmin=...)`, `scripts/54`)
+   closes the gap: the post-EoR stretch is **18.9% of D_3000**. Their
+   cosmology (`--cosmology chen2022`) and fiducial history were already
+   matched; the existing digitized curve (`data/chen23_fiducial.csv`) is the
+   right one.
+
+3. **The "haywire" stitched curves came from `v = mom/rho` (2026-10-26).**
+   AMBER deposits mass (`rho2` = 1+δ) and momentum (`mom2` = (1+δ)v) on the
+   mesh with TSC, interlacing and window deconvolution; the deconvolution
+   rings, so `rho2` goes **negative in voids (down to −2.8 at z≈5,
+   0.5–2% of cells below 0.05)**. The stitched path divided `mom/rho`,
+   interpolated δ and v separately, then multiplied back — pairing huge v
+   with a neighbour's normal density. Fix: stitch `q = x_HII · mom` directly
+   (`stream_lightcone`, `mode='momentum'`), exactly as `compute_cell` builds
+   P_q⊥. On the 2 Gpc/h run, stitched/Limber at ℓ=1000/2000/3000/5000/8000:
+
+   | path | ratios |
+   |---|---|
+   | velocity (`mom/rho`), rotated | 2.47 / 5.41 / 10.8 / 28.8 / 59.1 |
+   | momentum, rotated | 0.99 / 0.95 / 0.91 / 0.80 / 0.59 |
+   | momentum, **no rotation** | 0.98 / 0.98 / 0.98 / 0.97 / 0.97 |
+
+   Per-slice diagnostics: the velocity path was 2–12× too large in the fully
+   ionized z=5–7 stretch and within ~8% above z≈8.5 (where rho stays > 0).
+
+4. **Bilinear wrap-cycle rotation smooths small scales (2026-10-26).** The
+   remaining high-ℓ deficit (0.80 / 0.59 at ℓ=5000 / 8000) disappears with no
+   rotation (row 3 above) — interpolation onto a rotated grid is a low-pass
+   filter. For boxes that repeat along the LOS, use **axis re-orientation**
+   instead (`geometry='reorient'`, a discrete version of G. Kulkarni's
+   suggestion to rotate about an axis perpendicular to the LOS): per pass through
+   the box, a random box axis becomes the LOS (with that axis's momentum
+   component) plus random integer periodic shifts. Exact, no interpolation.
+
+5. **Corrected 256³ sweep (2026-10-27).** `scripts/56` (momentum +
+   re-orientation + AMBER's own χ(z)), job 58, plots
+   `data/plots/27Oct-amber/sweep_chen2023_*_momentum_reorient.png`. Patchy
+   D_3000 of the dotted curves, e.g. Δz=12.8: 1.56 µK² (was 26 with the
+   velocity path), A_z=1: 0.98 (was 30.6), A_z=2: 0.85, A_z=5: 0.74,
+   A_z=8: 0.75. Caveat: for Δz=12.8 and A_z=1 reionization is unfinished at
+   the LOS start z=5 (x_e=0.83, 0.98), so their stitched patchy window is
+   truncated there while Limber's lowest shell reaches z=4.75.
+
+6. **q∥ and the low-ℓ excess (2026-10-27).** Ma et al.'s kSZ auto-power
+   figure (2-D maps vs Limber q⊥/q∥) suggested the stitched low-ℓ excess is
+   the longitudinal momentum. `scripts/57` (job 59, 256³ fiducial, z≥5)
+   stitches full q and q⊥-only (q∥ removed per snapshot in Fourier space)
+   with identical geometry:
+
+   | ℓ | 200 | 300 | 500 | 1000 | 2000 | 3000 | 5000 |
+   |---|---|---|---|---|---|---|---|
+   | stitched q / stitched q⊥ | 2.10 | 1.95 | 1.01 | 1.01 | 1.00 | 1.01 | 1.00 |
+   | stitched q⊥ / Limber q⊥ | 2.9 | 2.0 | 0.71 | 0.87 | 1.21 | 0.88 | 1.02 |
+
+   So q∥ is about half of the stitched power at ℓ=200–300 and nothing from
+   ℓ≈500 up; q⊥ alone is still 2–3× Limber at ℓ=200–300 (box repeats and
+   Limber breakdown in a 378 Mpc box are the candidates). The Limber kernel
+   applied to P_q∥ (Ma et al.'s dotted curve) overpredicts the actual q∥
+   leakage by ~200–400× — it locates the power, it does not predict it,
+   consistent with the July 21cmFAST test (`scripts/09`, `18`).
+
+### Which code to use
+
+| Task | Use | Notes |
+|---|---|---|
+| Limber D_ℓ, any z range | `compute_cell` (+ `post_eor_zmin`), `scripts/30`, `54` | validated |
+| Stitched D_ℓ, one run | `scripts/55` (`--mode momentum`; `--no-rotation` if LOS ≤ 1 box) | memory-light, runs at 1536³ |
+| Stitched D_ℓ, a sweep | `scripts/56` → `scripts/41 --lightcone-npz … --suffix …` | momentum + re-orientation |
+| q⊥/q∥ split | `scripts/57`; `momentum.qsplit_power_from_q`, `transverse_part` | |
+| `scripts/32`, `33`, `stitch_from_amber` | **superseded for AMBER** | velocity path, bilinear rotation, Planck18 distances; kept to reproduce old plots |
+
+### Data on swarm (`~/ksz-pipeline-amber/runs/`)
+
+- `sweep_2gpc_1536/zmid8_dz4_az3_mh8_mfp3`: raw fields **deleted 2026-10-26**
+  (1.5 TB freed; regenerating = ~48 h AMBER run). Kept (~14 GB, mostly the
+  `zre` field): `qperp_checkpoint.pkl` (P_q⊥, all 28 shells),
+  `output/cmb/power_z=*.txt`, `tau.txt`, `cl_*.txt`, `amber_gate.npz`,
+  `post_eor_vs_chen23.npz`, and the three `stitched_streaming_*.npz`
+  (D_ℓ and the 2D kSZ maps for velocity-rotated, momentum-rotated,
+  momentum-no-rotation).
+- `sweep_chen2023/*`: raw fields **kept** (99 GB) for further stitched tests.
+- Retention rule going forward: keep raw fields only while a planned test
+  needs them; derived spectra and maps are small.
+
+### Workflow and operational notes
+
+- Code changes arrive as patches: apply on usha (`git am`), run tests, push;
+  swarm only pulls. Plots made on swarm: `scp` to usha, commit there.
+- `data/plots/` is gitignored; dated folders (`26Oct-amber/`, …) are
+  force-added (`git add -f`) snapshots.
+- PBS: source `setvars.sh` before `set -u`; activate conda inside the job;
+  `cd` to the repo root before `qsub`; use `python -u` (otherwise a killed
+  job leaves an empty log); give stitched sweeps hours, not minutes.
+- Light post-processing (`scripts/54`, reading checkpoints and text files)
+  is fine on the login node; anything reading raw fields goes through PBS.
+- **"21cm" means three different things here:** AMBER's own 21cm module
+  (built into `amber.x`, switched off in every generated `input.txt`, never
+  read by this repo); this repo's 21cmFAST path (scripts 01–22); and the
+  separate `ksz2-21cm` repository.
+
+### Earlier AMBER work (still valid)
+
+- AMBER's native ray-traced HEALPix lightcone (`Map=write`) runs on swarm
+  (2026-09-26, N=128/Nside=128); its map-based C_ℓ shows excess over its own
+  Limber C_ℓ at low–mid ℓ (×1.2–144 over ℓ=100–384). The low-ℓ q∥/Limber
+  findings above are relevant to that excess but have not been applied to it.
+- 2048³ does not fit any swarm node; 1536³ (dx≈1.30 Mpc/h) is the maximum.
+- Running `scripts/30` chained after `amber.x` in one job can be OOM-killed
+  by page-cache pressure from the TB-scale writes; run it as its own job.
+- The angular D_diag/D_off decomposition (patch `0002`) stays shelved
+  (decision 2026-09-29).
 
 ---
 
@@ -177,22 +247,33 @@ ksz-pipeline/
   data/
     cache/               # py21cmfast's own box cache (gitignored)
     products/             # final .npz/.npy results
-    plots/
+    plots/                 # gitignored; dated sub-folders are force-added
+    chen23_fiducial.csv     # digitized Chen+23 Fig. 10 fiducial
+  external/amber_patch/      # AMBER field-dump patch, HEALPix stub, build_amber.sh
   src/ksz_pipeline/
-    coeval/                # box generation, momentum/power spectra,
-                            # Limber projection, Georgiev reconstruction
+    coeval/                # box generation, momentum/power spectra
+                            # (P_q_perp, P_q_parallel split), Limber
+                            # projection, Georgiev reconstruction
     ksz/                     # optical depth/visibility, map building,
                               # stitched-lightcone construction, v4 angular
+    amber/                     # io (readers), adapter (units/conventions),
+                                # stitch_from_amber (in-memory, superseded),
+                                # stream_lightcone (slab-streaming stitcher)
     convergence/                # box-size / resolution / dz sweeps
     plotting/                     # shared matplotlib styles
     utils/                          # physical constants
   scripts/
-    01_make_ksz_lightcone_maps.py       # deprecated, see above
-    02_make_ksz_coeval_boxes.py           # trusted
-    03_stitched_lightcone_crosscheck.py     # trusted
-    04-06_convergence_*.py                    # convergence sweeps
-    07_v4_angular_vs_rectilinear.py             # set aside, see above
-  jobs/            # working PBS templates -- mirror these
+    01-22_*.py         # 21cmFAST path (01 deprecated, 02/03 trusted, 04-22 studies)
+    make_amber_input.py  # AMBER input.txt + linpowspec + amber_run.json
+    30-31              # AMBER validation gate + plot
+    32-33              # AMBER stitched, velocity path (superseded)
+    40-44              # AMBER sweep driver, plots, harvest, timing
+    50-54              # overlays vs Chen+23 (54: matched z=5-30, post-EoR)
+    55                 # streaming stitched lightcone, one run
+    56                 # streaming stitched lightcone, sweep (momentum+reorient)
+    57                 # q_perp / q_parallel test
+  jobs/            # working PBS templates -- mirror these (33-35, 55-59: AMBER)
+  pbs/             # 2 Gpc/h, 1536^3 AMBER run + probe
   notebooks/exploratory/    # plotting notebooks, no science logic
 ```
 
@@ -221,9 +302,27 @@ Things that are genuinely unresolved right now, not history:
   something changes.
 - **AMBER's native-map excess power (low–mid ℓ) is not yet root-caused**
   — periodicity vs. Limber breakdown are both plausible and not yet
-  distinguished from a single map; see "AMBER cross-check" above. The
-  angular D_diag/D_off decomposition that would disambiguate this is
-  deliberately shelved for now, not forgotten.
+  distinguished from a single map. The angular D_diag/D_off decomposition
+  that would disambiguate this is deliberately shelved for now, not
+  forgotten.
+- **AMBER stitched lightcone, low ℓ (ℓ ≲ 300).** On the 2 Gpc/h run the
+  corrected stitched map still rises to ~1–7 µK² at ℓ<300 where Limber is
+  ≲0.2; on the 256³ fiducial, q∥ explains about half of the excess at
+  ℓ=200–300 and q⊥ alone is still 2–3× Limber. Candidates: Limber breakdown
+  at large angles, sharp integration edges (z=5 start, patchy mask), few
+  modes / box repeats. Untried: a smooth taper at the integration limits
+  (would need the 2 Gpc/h fields, now deleted, or a new large-box run).
+- **AMBER stitched, residual 2–3% low** vs Limber (2 Gpc/h, ℓ=1000–8000),
+  plausibly the single-χ_eff k→ℓ mapping of a rectilinear map.
+- **`stitch_from_amber` and `scripts/32`/`33` still default to the velocity
+  path, bilinear rotation and Planck18 distances.** Superseded by
+  `stream_lightcone` / `scripts/55`–`57`; either switch their defaults or
+  retire them.
+- **Δz=12.8 and A_z=1 sweep points**: reionization unfinished at the
+  stitched LOS start z=5; extend the LOS to the lowest snapshot (z=4.75)
+  for a like-for-like patchy comparison.
+- **`docs/HANDOFF_wrap_cycle.md`** describes `main`; its note that
+  `amber-integration` lacks wrap-cycle code is out of date.
 - **`patchy/`, `reion_history/`, `io/` modules** referenced in earlier
   planning don't exist yet. Patchy optical-depth screening and the
   reionization-history (`HII_EFF_FACTOR`) parameter scan are not yet

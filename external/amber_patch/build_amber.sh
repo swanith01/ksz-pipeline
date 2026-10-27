@@ -2,7 +2,9 @@
 # external/amber_patch/build_amber.sh [install_dir]
 #
 # [ksz-pipeline] Clone AMBER at the commit the adapter was validated against,
-# apply the field-dump patch, add the HEALPix stub, build with Intel ifort+MKL.
+# apply the local diagnostic patches (0001 field dump, 0002 per-shell kSZ
+# map dump -- see README.md here: GPL v3, not upstream AMBER), add the
+# HEALPix stub, build with Intel ifort+MKL.
 # No admin rights needed. Re-running is safe (idempotent).
 #
 #   bash external/amber_patch/build_amber.sh            # -> ~/amber/src/amber.x
@@ -44,12 +46,14 @@ fi
 cd "$DEST"
 git fetch -q origin || true
 if grep -q cmb_dumpfields src/cmbreion.f90 2>/dev/null \
+   && grep -q cmb_dumpkszmap src/cmbreion.f90 2>/dev/null \
    && [ "$(git rev-parse HEAD)" = "$AMBER_COMMIT" ]; then
-  echo "AMBER already at $AMBER_COMMIT with patch applied"
+  echo "AMBER already at $AMBER_COMMIT with patches 0001+0002 applied"
 else
   git checkout -q -- . && git checkout -q "$AMBER_COMMIT"
   git apply "$HERE/0001-dump-fields-for-ksz-pipeline.patch"
-  echo "AMBER checked out at $AMBER_COMMIT, dump patch applied"
+  git apply "$HERE/0002-dump-shell-ksz-maps.patch"
+  echo "AMBER checked out at $AMBER_COMMIT, patches 0001+0002 applied"
 fi
 cp "$HERE/healpix_stub.f90" "$HERE/Makefile.ksz" src/
 cd src

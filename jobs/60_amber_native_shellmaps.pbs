@@ -1,0 +1,45 @@
+#!/bin/bash
+#PBS -N amber_native_shells
+#PBS -l nodes=1:ppn=16
+#PBS -l walltime=24:00:00
+#PBS -j oe
+#PBS -o /user1/swanith/ksz-pipeline-amber/jobs/amber_native_shellmaps.log
+
+# AMBER native HEALPix lightcone, shell by shell (patch 0002), then the
+# P_diag/P_off + periodicity analysis (scripts/58).
+#
+# BEFORE SUBMITTING: rebuild amber.x with patch 0002 (login node is fine,
+# a few minutes):   bash external/amber_patch/build_amber.sh
+# The check below refuses to run a binary without 0002.
+#
+# Settings: fiducial history, chen2022 cosmology, L=256 Mpc/h (as the
+# sweep), N=128 (cell 2 Mpc/h -- map_make's cost scales with the number of
+# particles inside the lightcone volume, ~8x less than N=256), Nside=256,
+# czdel=0.1 -> 140 shells over z=4.5-18.5 (thin enough to resolve lattice
+# lags radially). Outputs: 140 x 6 MB kSZ maps + 140 x ~34 MB field dumps
+# (patch 0001; deletable afterwards).
+# Walltime is a guess: the earlier N=128 / Nside=128 Map=write run is the
+# best reference for map_make's cost -- adjust if you know its runtime.
+
+set -e
+cd /user1/swanith/ksz-pipeline-amber
+source /apps/intel/oneapi/setvars.sh >/dev/null
+source /user1/swanith/miniconda3/etc/profile.d/conda.sh
+conda activate p21c_v3
+export LD_LIBRARY_PATH="$HOME/Healpix_3.83/lib:/apps/anaconda3/lib:$LD_LIBRARY_PATH"
+export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
+
+AMBER_X="$HOME/amber/src/amber.x"
+grep -q 'mapksz_' "$AMBER_X" || { echo "amber.x lacks patch 0002 -- run build_amber.sh first"; exit 1; }
+python -c "import healpy" || { echo "healpy missing in p21c_v3"; exit 1; }
+
+R=runs/native_shells_n128_nside256
+python scripts/make_amber_input.py --out "$R" \
+    --L 256 --N 128 --zmid 8 --zdel 4 --zasy 3 --Mmin 1e8 --mfp 3.0 \
+    --cosmology chen2022 --mapmake write --nside 256 --czdel 0.1 --ncore 16
+mkdir -p "$R"/output/{cosmo,reion,grf,lpt,esf,mesh,cmb}
+( cd "$R" && "$AMBER_X" < input/input.txt > output/log.txt 2>&1 )
+grep -q "AMBER completed" "$R/output/log.txt" || { tail -30 "$R/output/log.txt"; exit 1; }
+ls "$R"/output/cmb/mapksz_*.dat | wc -l
+
+python -u scripts/58_amber_native_shell_decomposition.py --run "$R"

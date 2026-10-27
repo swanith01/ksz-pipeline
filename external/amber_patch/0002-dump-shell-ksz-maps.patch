@@ -1,0 +1,48 @@
+diff --git a/src/cmbreion.f90 b/src/cmbreion.f90
+index 5d0f582..76b45bd 100644
+--- a/src/cmbreion.f90
++++ b/src/cmbreion.f90
+@@ -196,6 +196,8 @@ contains
+        ! Healpix maps
+        if (cmb%mapmake == 'make' .or. cmb%mapmake == 'write') then
+           call cmb_mapmake
++          ! [ksz-pipeline] running kSZ map after this shell (0002)
++          call cmb_dumpkszmap
+        endif
+     enddo
+ 
+@@ -238,6 +240,34 @@ contains
+     end subroutine cmb_dumpfields
+ 
+ 
++    subroutine cmb_dumpkszmap
++      ! [ksz-pipeline] Running (accumulated) HEALPix kSZ map, written
++      ! right after this shell's map_make. Shells run from high to low z,
++      ! so the map of shell iz alone = (this file) - (file of shell iz+1).
++      ! Raw stream file, no record markers, native endian:
++      !   integer(8) Nside, iz, Nz
++      !   real(8)    z(3), r(3)       : this shell's (start, mid, end)
++      !                                 redshift and comoving distance
++      !                                 [Mpc/h], as cmb%ray(iz)
++      !   real(8)    ksz(0:Npix-1)    : running map, RING ordering, same
++      !                                 units as map_ksz_nside=*.fits
++      implicit none
++      integer(4)    :: un
++      character(80) :: fn
++
++      un = 13
++      fn = trim(cmb%dirout)//'mapksz_'//trim(sim%zstr)//'.dat'
++      write(*,*) 'Writing ',trim(fn)
++      open(un,file=fn,access='stream',form='unformatted',status='replace')
++      write(un) int(cmb%Nside,kind=8),int(cmb%iz,kind=8),int(cmb%Nz,kind=8)
++      write(un) cmb%ray(cmb%iz)%z
++      write(un) cmb%ray(cmb%iz)%r
++      write(un) cmb%ksz
++      close(un)
++      return
++    end subroutine cmb_dumpkszmap
++
++
+     subroutine cmb_ray
+       ! Default
+       implicit none

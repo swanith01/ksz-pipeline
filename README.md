@@ -25,7 +25,7 @@ cross-correlation paper.
 | Method | Script | Status |
 |---|---|---|
 | Native lightcone | `scripts/01_make_ksz_lightcone_maps.py` | ❌ Deprecated — unresolved D_ℓ excess |
-| Angular lightcone (py21cmfast v4) | `scripts/07_v4_angular_vs_rectilinear.py` | ⏸️ Set aside — see Open Items |
+| Angular lightcone (py21cmfast v4) | `scripts/07_v4_angular_vs_rectilinear.py` | ⏸️ Set aside — see Open Items. Native v4 lightcones (rectilinear *and* angular) are shown to be box-periodic along the LOS — see "Native 21cmFAST lightcone periodicity" below |
 
 If you're picking this repo up fresh, run `02` and `03` and nothing else
 until you've read the "Open Items" section below.
@@ -215,6 +215,19 @@ ksz-pipeline/
     29_nikolic_ensemble_comparison.py               # aggregate D_3000 vs
                                                        # Nikolic+23; no
                                                        # py21cmfast dependency
+    34_extract_xH_histories.py      # sweep pickles -> xH(z) histories .npz
+                                     # (no py21cmfast needed)
+    35_slides_convergence_figures.py  # the six 12-Oct slide figures
+                                       # (coeval + wrap-cycle stitched,
+                                       # box size / resolution / dz)
+    36_run_logging_h5.py      # wrapper: logs every cache .h5 a script opens
+                              # (H5_LOG=<file> python 36_... <script> <args>)
+    37_cache_prune.py         # dry-run-first cache cleanup against a keep
+                              # list from 36; writes a manifest before
+                              # deleting; never touches sub-folders
+    38_native_periodicity_check.py  # LOS autocorrelation rho(dchi) of native
+                                     # v4 rectilinear vs angular lightcones
+                                     # (no kSZ); needs the v4 env p21c_v41
   jobs/            # working PBS templates -- mirror these. The specific
                     # job files used for the wrap-cycle/Nikolic-ensemble
                     # work below are cluster-local scratch, not committed
@@ -223,6 +236,97 @@ ksz-pipeline/
                     # relevant config/script instead.
   notebooks/exploratory/    # plotting notebooks, no science logic
 ```
+
+---
+
+## Convergence sweeps + slide deck (12–16 Oct 2026)
+
+Box-size, resolution and snapshot-number (dz) convergence of D_ℓ, run at
+fiducial scale for both coeval-direct (Limber, P_q⊥) and wrap-cycle
+stitched lightcones (`--wrap-cycle-seed 123`). Each slide figure has the
+kSZ D_ℓ on the left and the reionization history on the right.
+
+- **Figures:** `data/plots/12Oct2026_final_slide_deck/`
+  (`slides_coeval_{boxsize,resolution,dz}.png`,
+  `slides_wrapcycle_{boxsize,resolution,dz}.png`), made by
+  `scripts/35_slides_convergence_figures.py`. Stitched box-size and
+  resolution panels overlay the same-configuration coeval-direct curve
+  (dashed, same colour).
+- **Products:** `data/products/convergence_stitched_{boxsize,resolution}_wrapcycle123.npz`,
+  `data/plots/28_stitched_dz_wrapcycle123/stitched_dz_convergence.npz`,
+  `data/products/convergence_xH_histories.npz`.
+- **Sweeps:** box size L = 200–1000 Mpc at fixed 6.25 Mpc cells; resolution
+  HII_DIM = 32–512 at 800 Mpc; dz = 29 / 15 / 8 snapshots.
+- **Findings:**
+  - The reionization history is independent of box size and of dz.
+  - Resolution *does* shift the history (midpoint z ≈ 8.25 → 7.51 from low to
+    high resolution) — flagged for discussion, not yet chased.
+  - Stitched/direct D_3000 rises with resolution (~29% → ~90%), consistent
+    with a pixel/Nyquist effect near ℓ = 3000 (not yet tested).
+  - Stitched dz spread (7.5–8.4%) ≈ direct (7.7%).
+  - Stitched spectra show a large low-ℓ excess and scatter relative to
+    direct.
+- **Caveats:**
+  - Low-resolution runs don't reach ℓ = 3000, so D_3000 is shown as "n/a".
+    The `D3000` values *stored* in `convergence_stitched_resolution_wrapcycle123.npz`
+    for res32/res64 (0.07, 0.098) are invalid end-point clamps from
+    `np.interp`; script 35 recomputes with a guard. A one-line NaN-guard fix
+    for `convergence/stitched_sweep.py` exists but is not yet on `main`.
+  - Coeval sweeps use each run's own patchy window, while the stitched sweeps
+    use the closure-test matched window (z = 4.5–18, χ_eff = 8504 Mpc).
+
+**Cache housekeeping (16 Oct 2026):** `data/cache` (top level) was pruned
+from ~840 GB to 437 GB. The keep list is the 88 boxes the fiducial dz run
+actually opened (`data/h5_touched_28.txt`, recorded with script 36):
+29 IonizedBox + 29 PerturbedField + 29 BrightnessTemp + the 105 GB
+800 Mpc/512³ `InitialConditions_557e…`. The deletion manifest is
+`data/cache/prune_manifest_20261016_174315.txt`. **Never delete cache files
+while a job is running** — py21cmfast reads cached boxes lazily, and a
+missing file crashes the job with `OSError: No boxes exist for these
+parameters`.
+
+---
+
+## Native 21cmFAST lightcone periodicity (27 Oct 2026)
+
+Question: are native py21cmfast v4 lightcones — in particular *angular*
+ones — free of the box-periodicity artifact that wrap-cycle stitching was
+built to suppress? **No.**
+
+`scripts/38_native_periodicity_check.py` (no kSZ) measures the
+line-of-sight autocorrelation of each per-slice-normalised field along each
+pixel's ray, ρ(Δχ). Periodic tiling shows up as peaks at Δχ = L, 2L, 3L.
+Quick run: 400 Mpc / 64³, z = 5–12, seed 37, rectilinear and angular
+(`like_rectilinear`) built from the same inputs and cache.
+
+| peak ρ at | L | 2L | 3L |
+|---|---|---|---|
+| rectilinear, density and velocity_z | 1.00 | 1.00 | 1.00 |
+| angular, density | 0.42 | 0.17 | 0.09 |
+| angular, velocity_z | 0.84 | 0.60 | 0.41 |
+
+Controls at 0.5L and 1.5L are ≈ 0 for density and ≈ −0.1 for velocity (the
+LOS velocity correlation is negative at intermediate separations, and the
+same dip appears in the rectilinear panel).
+
+- **Interpretation:** the peaks sit exactly at integer multiples of L, so
+  the angular lightconer samples the periodically tiled box with no
+  rotation or offset between copies. Field evolution with z does not break
+  the repetition (rectilinear stays at 1.00 out to 3L), so the decay in the
+  angular case is geometric: rays drift transversely by ~n·L·tanθ. Velocity
+  — the field kSZ depends on — stays strongly periodic because it is
+  coherent on large scales.
+- **Unverified:** the inner/outer pixel-ring split (meant as an off-axis-angle
+  proxy) is inconsistent between density and velocity. Either the
+  flattened-pixel ordering assumed in `lightcone_v4._reshape_angular_fields`
+  is wrong, or the angular observer/origin is not at the field centre. Don't
+  quote the ring split as physics.
+- **Note:** 21cmFAST's `AngularLightconer` is not HEALPix-based. It takes
+  arbitrary `latitude`/`longitude` arrays (`like_rectilinear` uses a regular
+  lon/lat grid), and HEALPix pixel centres can be passed in instead.
+- **Output:** `data/plots/27Oct2026_native_periodicity/` (PNG + npz).
+- **Next:** the same ρ(Δχ) test on the wrap-cycle stitched lightcone (v3),
+  and the same test on AMBER's native HEALPix lightcone.
 
 ---
 
@@ -291,7 +395,15 @@ Things that are genuinely unresolved right now, not history:
 - **Angular lightcone (script 07)** works technically but was set aside
   per project guidance — it also runs on a different py21cmfast major
   version (4.x vs 3.x used everywhere else), which complicates comparing
-  it directly to the trusted methods.
+  it directly to the trusted methods. As of 27 Oct 2026, native v4 angular
+  lightcones are known to be LOS-periodic (velocity ρ(L) ≈ 0.84 at
+  400 Mpc), so they are *not* a periodicity-free reference. Open: the
+  angular pixel ordering and observer origin (see the periodicity section).
+- **Stitched low-ℓ excess and scatter** relative to coeval-direct in the
+  12-Oct sweeps — likely tied to the coherence/periodicity work, not yet
+  quantified.
+- **Resolution dependence** of the reionization history (midpoint shift)
+  and of stitched/direct D_3000 — awaiting discussion with Girish.
 - **Native lightcone (script 01)** has a large, unexplained D_ℓ excess.
   Root cause was never found; the stitched-lightcone method exists
   specifically to sidestep it. Not planned to be revisited unless
@@ -305,9 +417,9 @@ Things that are genuinely unresolved right now, not history:
   planning don't exist yet. Patchy optical-depth screening and the
   reionization-history (`HII_EFF_FACTOR`) parameter scan are not yet
   ported into this repo.
-- **Box-size/resolution convergence sweeps** (`scripts/04`, `05`) are
-  built and pass quicktest-scale checks, but haven't been run at
-  fiducial scale yet.
+- **Convergence sweeps** have now been run at fiducial scale (see the
+  12–16 Oct section). Still open: the `stitched_sweep.py` NaN-guard fix for
+  D_3000 beyond ℓ_max is not yet on `main`.
 - **`data/products/` is currently tracked in git.** Binary result files
   in version control is worth reconsidering as this grows.
 

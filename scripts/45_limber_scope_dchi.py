@@ -216,102 +216,130 @@ def main(a):
                   + " ".join(f"{v:8.3f}" for v in vals)
                   + f" {vals[2] / dd:9.2f} {vals[0] / dd:9.2f}")
 
+    # ---------------- styling shared by all figures ----------------
+    # Native lightcones are the "heroes" when present; the stitched ones become
+    # faint context. A column whose native lightcones are all v4 (and has a v4
+    # reference) shows only the v4 Limber curve -- the v3 one is a different
+    # universe there. Legends go in a separate right-hand panel.
+    has_native = any(r["kind"].startswith("native") for r in results)
+
+    def style(r):
+        faint = has_native and r["kind"].startswith("stitched")
+        return dict(color=COLORS.get(r["kind"], "0.4"), alpha=0.35 if faint else 1.0,
+                    lw_solid=1.2 if faint else 2.2, lw_dash=0.8 if faint else 1.3,
+                    lw_step=1.0 if faint else 1.8, zorder=1 if faint else 3)
+
+    def v4_only_column(L):
+        nat = [r for r in results if r["L"] == L and r["kind"].startswith("native")]
+        return (v4ref is not None and float(v4ref["box_len"]) == L and nat
+                and all(r["kind"].startswith("native v4") for r in nat))
+
+    def legend_panel(fig, ax_leg, axes, note=None):
+        seen, hs, ls = set(), [], []
+        for ax in axes:
+            for h, l in zip(*ax.get_legend_handles_labels()):
+                if l not in seen:
+                    seen.add(l); hs.append(h); ls.append(l)
+        ax_leg.axis("off")
+        ax_leg.legend(hs, ls, loc="upper left", frameon=False, fontsize=8)
+        if note:
+            ax_leg.text(0.0, 0.0, note, transform=ax_leg.transAxes, fontsize=7.5,
+                        va="bottom", ha="left", color="0.25", wrap=True)
+
+    def stitched_note():
+        if has_native and any(r["kind"].startswith("stitched") for r in results):
+            return "Faint: stitched lightcones (v3), for context;\ntheir ratios are to the v3 Limber curve."
+        return ""
+
     # -------- figure 1: D_ell, total vs truncated vs direct --------
-    fig, axs = plt.subplots(2, len(boxes), figsize=(5.2 * len(boxes), 7), sharex=True,
-                            squeeze=False, gridspec_kw=dict(height_ratios=[2.2, 1]),
-                            constrained_layout=True)
+    nb = len(boxes)
+    fig = plt.figure(figsize=(5.0 * nb + 3.6, 7), constrained_layout=True)
+    gs = fig.add_gridspec(2, nb + 1, height_ratios=[2.2, 1], width_ratios=[1] * nb + [0.75])
+    top_axes = []
     for c, L in enumerate(boxes):
-        ax, axr = axs[0, c], axs[1, c]
+        ax = fig.add_subplot(gs[0, c])
+        axr = fig.add_subplot(gs[1, c], sharex=ax)
+        top_axes.append(ax)
+        v4col = v4_only_column(L)
         ed, Dd = direct_for_box(results, L)
-        if ed is not None:
-            ax.plot(ed, Dd, color="k", lw=2.5, label="coeval-direct (Limber), v3")
+        if ed is not None and not v4col:
+            ax.plot(ed, Dd, color="k", lw=2.6, zorder=4,
+                    label="Limber (coeval-direct), v3" if v4ref is not None else "Limber (coeval-direct)")
         if (v4ref is not None and float(v4ref["box_len"]) == L
                 and any(r["kind"].startswith("native v4") for r in results if r["L"] == L)):
-            ax.plot(v4ref["ell_direct"], v4ref["Dl_direct"], color="k", lw=2, ls="-.",
-                    label="coeval-direct (Limber), v4 -- reference for v4 lightcones")
+            ax.plot(v4ref["ell_direct"], v4ref["Dl_direct"], color="k", zorder=4,
+                    lw=2.6 if v4col else 2.0, ls="-" if v4col else "-.",
+                    label="Limber (coeval-direct), v4")
         for r in [r for r in results if r["L"] == L]:
-            col = COLORS.get(r["kind"], "0.4")
+            st = style(r)
             ed, Dd = ref_for(r, results, v4ref)
-            ax.plot(r["ell"], r["D_trunc"], color=col, lw=2,
-                    label=f"{r['kind']}: |Δχ| < L/2")
-            ax.plot(r["ell"], r["D_total"], color=col, lw=1.2, ls="--",
-                    label=f"{r['kind']}: all pairs")
+            ax.plot(r["ell"], r["D_trunc"], color=st["color"], alpha=st["alpha"], lw=st["lw_solid"],
+                    zorder=st["zorder"], label=f"{r['kind']}: replicas removed")
+            ax.plot(r["ell"], r["D_total"], color=st["color"], alpha=st["alpha"], lw=st["lw_dash"],
+                    ls="--", zorder=st["zorder"], label=f"{r['kind']}: all pairs")
             if ed is not None:
                 ref = np.exp(np.interp(np.log(r["ell"]), np.log(ed), np.log(Dd),
                                        left=np.nan, right=np.nan))
-                axr.plot(r["ell"], r["D_trunc"] / ref, color=col, lw=2)
-                axr.plot(r["ell"], r["D_total"] / ref, color=col, lw=1.2, ls="--")
-        ax.axvline(3000, color="0.6", ls=":", lw=1)
-        axr.axvline(3000, color="0.6", ls=":", lw=1)
+                axr.plot(r["ell"], r["D_trunc"] / ref, color=st["color"], alpha=st["alpha"],
+                         lw=st["lw_solid"], zorder=st["zorder"])
+                axr.plot(r["ell"], r["D_total"] / ref, color=st["color"], alpha=st["alpha"],
+                         lw=st["lw_dash"], ls="--", zorder=st["zorder"])
+        for x in (ax, axr):
+            x.axvline(3000, color="0.6", ls=":", lw=1)
+            x.set_xscale("log")
         axr.axhline(1, color="k", lw=1)
-        ax.set_xscale("log"); ax.set_yscale("log")
+        ax.set_yscale("log")
         ax.set_ylabel(r"$D_\ell$ [$\mu$K$^2$]")
         ax.set_title(f"L = {L:.0f} Mpc")
-        axr.set_xscale("log"); axr.set_ylabel("ratio to direct")
+        ax.tick_params(labelbottom=False)
+        axr.set_ylabel("ratio to own Limber")
         axr.set_xlabel(r"$\ell$")
         axr.set_ylim(0, 3)
-        ax.legend(frameon=False, fontsize=7)
-    fig.suptitle("Lightcone kSZ with box-replica pairs removed (|Δχ| < L/2, solid) "
-                 "vs all pairs (dashed) vs Limber")
+    legend_panel(fig, fig.add_subplot(gs[:, nb]), top_axes,
+                 "Solid: only shell pairs closer than L/2\n(box replicas removed).\n"
+                 "Dashed: all shell pairs.\n\n" + stitched_note())
+    fig.suptitle("Lightcone kSZ vs Limber, with and without box-replica pairs")
     fig.savefig(os.path.join(a.out, "limber_scope_Dl.png"), dpi=150)
     plt.close(fig)
 
-    # -------- figure 2: cross-power vs separation --------
-    fig, axs = plt.subplots(len(bands), len(boxes), figsize=(5.2 * len(boxes), 3.4 * len(bands)),
-                            squeeze=False, constrained_layout=True)
-    for c, L in enumerate(boxes):
-        ed, Dd = direct_for_box(results, L)
-        for b, (lo, hi) in enumerate(bands):
-            ax = axs[b, c]
-            for r in [r for r in results if r["L"] == L]:
-                er, Dr = ref_for(r, results, v4ref)
-                dd = band(er, Dr, lo, hi) if er is not None else 1.0
-                x = r["dchi"] / L
-                bw = max(r["width"] / L, 0.05)
-                edges = np.arange(0, x.max() + bw, bw)
-                pb = band(r["ell"], r["Dpairs"], lo, hi)        # per pair, band-mean
-                s = np.array([pb[(x >= edges[k]) & (x < edges[k + 1])].sum()
-                              for k in range(len(edges) - 1)]) / dd
-                ax.step(0.5 * (edges[:-1] + edges[1:]), s, where="mid",
-                        color=COLORS.get(r["kind"], "0.4"), lw=1.5, label=r["kind"])
-            ax.axvspan(0, 0.5, color="0.92", zorder=0)
-            for k in range(1, int(np.ceil(max(r["dchi"].max() for r in results) / L)) + 1):
-                ax.axvline(k, color="0.5", ls=":", lw=1)
-            ax.axhline(0, color="k", lw=0.8)
-            ax.set_title(f"L = {L:.0f} Mpc, ℓ = {int(lo)}–{int(hi)}")
-            ax.set_xlabel(r"$|\Delta\chi| / L_{\rm box}$  (shaded: kept in $D_{\rm trunc}$)")
-            ax.set_ylabel("cross-power / D_direct")
-            ax.legend(frameon=False, fontsize=7)
-    fig.savefig(os.path.join(a.out, "limber_scope_dchi.png"), dpi=150)
-    plt.close(fig)
+    # -------- figures 2 and 3: cross-power vs separation --------
+    def dchi_figure(fname, norm_kind, ylabel, xlabel_extra):
+        fig = plt.figure(figsize=(5.0 * nb + 3.6, 3.4 * len(bands)), constrained_layout=True)
+        gs = fig.add_gridspec(len(bands), nb + 1, width_ratios=[1] * nb + [0.75])
+        axes = []
+        for c, L in enumerate(boxes):
+            for b, (lo, hi) in enumerate(bands):
+                ax = fig.add_subplot(gs[b, c]); axes.append(ax)
+                for r in [r for r in results if r["L"] == L]:
+                    st = style(r)
+                    if norm_kind == "direct":
+                        er, Dr = ref_for(r, results, v4ref)
+                        dd = band(er, Dr, lo, hi) if er is not None else 1.0
+                    else:
+                        dd = band(r["ell"], r["D_diag"], lo, hi)
+                    x = r["dchi"] / L
+                    bw = max(r["width"] / L, 0.05)
+                    edges = np.arange(0, x.max() + bw, bw)
+                    pb = band(r["ell"], r["Dpairs"], lo, hi)        # per pair, band-mean
+                    sv = np.array([pb[(x >= edges[k]) & (x < edges[k + 1])].sum()
+                                   for k in range(len(edges) - 1)]) / dd
+                    ax.step(0.5 * (edges[:-1] + edges[1:]), sv, where="mid", color=st["color"],
+                            alpha=st["alpha"], lw=st["lw_step"], zorder=st["zorder"], label=r["kind"])
+                ax.axvspan(0, 0.5, color="0.92", zorder=0)
+                for k in range(1, int(np.ceil(max(r["dchi"].max() for r in results) / L)) + 1):
+                    ax.axvline(k, color="0.5", ls=":", lw=1)
+                ax.axhline(0, color="k", lw=0.8)
+                ax.set_title(f"L = {L:.0f} Mpc, ℓ = {int(lo)}–{int(hi)}")
+                ax.set_xlabel(r"$|\Delta\chi| / L_{\rm box}$" + xlabel_extra)
+                ax.set_ylabel(ylabel)
+        legend_panel(fig, fig.add_subplot(gs[:, nb]), axes,
+                     "Shaded: |Δχ| < L/2, the pairs kept\nin 'replicas removed'.\n"
+                     "Dotted: whole box lengths.\n\n" + stitched_note())
+        fig.savefig(os.path.join(a.out, fname), dpi=150)
+        plt.close(fig)
 
-    # -------- figure 3: cross-power vs separation, normalised to each lightcone's OWN diag
-    # (needed for lightcones from a different realisation/astro model, e.g. v4) --------
-    fig, axs = plt.subplots(len(bands), len(boxes), figsize=(5.2 * len(boxes), 3.4 * len(bands)),
-                            squeeze=False, constrained_layout=True)
-    for c, L in enumerate(boxes):
-        for b, (lo, hi) in enumerate(bands):
-            ax = axs[b, c]
-            for r in [r for r in results if r["L"] == L]:
-                x = r["dchi"] / L
-                bw = max(r["width"] / L, 0.05)
-                edges = np.arange(0, x.max() + bw, bw)
-                pb = band(r["ell"], r["Dpairs"], lo, hi)
-                own = band(r["ell"], r["D_diag"], lo, hi)
-                s = np.array([pb[(x >= edges[k]) & (x < edges[k + 1])].sum()
-                              for k in range(len(edges) - 1)]) / own
-                ax.step(0.5 * (edges[:-1] + edges[1:]), s, where="mid",
-                        color=COLORS.get(r["kind"], "0.4"), lw=1.5, label=r["kind"])
-            ax.axvspan(0, 0.5, color="0.92", zorder=0)
-            for k in range(1, int(np.ceil(max(r["dchi"].max() for r in results) / L)) + 1):
-                ax.axvline(k, color="0.5", ls=":", lw=1)
-            ax.axhline(0, color="k", lw=0.8)
-            ax.set_title(f"L = {L:.0f} Mpc, ℓ = {int(lo)}–{int(hi)}")
-            ax.set_xlabel(r"$|\Delta\chi| / L_{\rm box}$")
-            ax.set_ylabel("cross-power / own D_diag")
-            ax.legend(frameon=False, fontsize=7)
-    fig.savefig(os.path.join(a.out, "limber_scope_dchi_selfnorm.png"), dpi=150)
-    plt.close(fig)
+    dchi_figure("limber_scope_dchi.png", "direct", "cross-power / own Limber", "")
+    dchi_figure("limber_scope_dchi_selfnorm.png", "self", "cross-power / own D_diag", "")
 
     print(f"\n{'lightcone':26s} {'L':>5s} {'band':>11s} {'far/total':>9s} {'near/diag':>9s}"
           "   (internal ratios: independent of velocity units and of the Limber reference)")

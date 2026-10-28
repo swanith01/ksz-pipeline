@@ -274,7 +274,7 @@ def main(a):
             st = style(r)
             ed, Dd = ref_for(r, results, v4ref)
             ax.plot(r["ell"], r["D_trunc"], color=st["color"], alpha=st["alpha"], lw=st["lw_solid"],
-                    zorder=st["zorder"], label=f"{r['kind']}: replicas removed")
+                    zorder=st["zorder"], label=f"{r['kind']}: |Δχ| < L/2")
             ax.plot(r["ell"], r["D_total"], color=st["color"], alpha=st["alpha"], lw=st["lw_dash"],
                     ls="--", zorder=st["zorder"], label=f"{r['kind']}: all pairs")
             if ed is not None:
@@ -296,7 +296,7 @@ def main(a):
         axr.set_xlabel(r"$\ell$")
         axr.set_ylim(0, 3)
     legend_panel(fig, fig.add_subplot(gs[:, nb]), top_axes,
-                 "Solid: only shell pairs closer than L/2\n(box replicas removed).\n"
+                 "Solid, |Δχ| < L/2: only shell pairs closer\nthan half a box (box replicas removed).\n"
                  "Dashed: all shell pairs.\n\n" + stitched_note())
     fig.suptitle("Lightcone kSZ vs Limber, with and without box-replica pairs")
     fig.savefig(os.path.join(a.out, "limber_scope_Dl.png"), dpi=150)
@@ -333,7 +333,7 @@ def main(a):
                 ax.set_xlabel(r"$|\Delta\chi| / L_{\rm box}$" + xlabel_extra)
                 ax.set_ylabel(ylabel)
         legend_panel(fig, fig.add_subplot(gs[:, nb]), axes,
-                     "Shaded: |Δχ| < L/2, the pairs kept\nin 'replicas removed'.\n"
+                     "Shaded: |Δχ| < L/2, the shell pairs kept\nin the solid curves of the D_ell figure.\n"
                      "Dotted: whole box lengths.\n\n" + stitched_note())
         fig.savefig(os.path.join(a.out, fname), dpi=150)
         plt.close(fig)

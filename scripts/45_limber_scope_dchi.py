@@ -168,6 +168,18 @@ def direct_for_box(results, L):
     return r["ell_direct"], r["Dl_direct"]
 
 
+def ref_for(r, results, v4ref):
+    """
+    Limber reference for one lightcone: native v4 lightcones are compared with
+    the v4 coeval-direct Limber (script 46, same py21cmfast version, inputs and
+    realisation) when one is given for that box size; everything else with the
+    v3 coeval-direct from a --source coeval run (direct_for_box).
+    """
+    if v4ref is not None and r["kind"].startswith("native v4") and float(v4ref["box_len"]) == r["L"]:
+        return np.asarray(v4ref["ell_direct"]), np.asarray(v4ref["Dl_direct"])
+    return direct_for_box(results, r["L"])
+
+
 def band(ell, D, lo, hi):
     """Mean of D over ell in [lo, hi] along the last axis (float for 1-D input)."""
     D = np.asarray(D)
@@ -186,13 +198,17 @@ def main(a):
     os.makedirs(a.out, exist_ok=True)
 
     results = [analyse(p) for p in a.files]
+    v4ref = dict(np.load(a.v4_direct)) if a.v4_direct else None
+    if v4ref is not None:
+        print(f"[ref] native v4 lightcones are compared with the v4 coeval-direct in {a.v4_direct} "
+              f"(L = {float(v4ref['box_len']):.0f} Mpc)")
     boxes = sorted({r["L"] for r in results})
     bands = [(300.0, 1000.0), (2000.0, 4000.0)]
 
     print(f"\n{'lightcone':26s} {'L':>5s} {'band':>11s} {'direct':>8s} {'total':>8s} "
           f"{'diag':>8s} {'trunc':>8s} {'far':>8s} {'trunc/dir':>9s} {'total/dir':>9s}")
     for r in results:
-        ed, Dd = direct_for_box(results, r["L"])
+        ed, Dd = ref_for(r, results, v4ref)
         for lo, hi in bands:
             dd = band(ed, Dd, lo, hi) if ed is not None else np.nan
             vals = [band(r["ell"], r[k], lo, hi) for k in ("D_total", "D_diag", "D_trunc", "D_far")]
@@ -208,9 +224,14 @@ def main(a):
         ax, axr = axs[0, c], axs[1, c]
         ed, Dd = direct_for_box(results, L)
         if ed is not None:
-            ax.plot(ed, Dd, color="k", lw=2.5, label="coeval-direct (Limber)")
+            ax.plot(ed, Dd, color="k", lw=2.5, label="coeval-direct (Limber), v3")
+        if (v4ref is not None and float(v4ref["box_len"]) == L
+                and any(r["kind"].startswith("native v4") for r in results if r["L"] == L)):
+            ax.plot(v4ref["ell_direct"], v4ref["Dl_direct"], color="k", lw=2, ls="-.",
+                    label="coeval-direct (Limber), v4 -- reference for v4 lightcones")
         for r in [r for r in results if r["L"] == L]:
             col = COLORS.get(r["kind"], "0.4")
+            ed, Dd = ref_for(r, results, v4ref)
             ax.plot(r["ell"], r["D_trunc"], color=col, lw=2,
                     label=f"{r['kind']}: |Δχ| < L/2")
             ax.plot(r["ell"], r["D_total"], color=col, lw=1.2, ls="--",
@@ -242,8 +263,9 @@ def main(a):
         ed, Dd = direct_for_box(results, L)
         for b, (lo, hi) in enumerate(bands):
             ax = axs[b, c]
-            dd = band(ed, Dd, lo, hi) if ed is not None else 1.0
             for r in [r for r in results if r["L"] == L]:
+                er, Dr = ref_for(r, results, v4ref)
+                dd = band(er, Dr, lo, hi) if er is not None else 1.0
                 x = r["dchi"] / L
                 bw = max(r["width"] / L, 0.05)
                 edges = np.arange(0, x.max() + bw, bw)
@@ -313,4 +335,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("files", nargs="+", help="theta_groups*.npz from script 17 --save-theta-width")
     p.add_argument("--out", default="data/plots/45_limber_scope")
+    p.add_argument("--v4-direct", default=None,
+                   help="npz from scripts/46_v4_coeval_limber.py (ell_direct, Dl_direct, box_len): "
+                        "Limber reference used for native v4 lightcones at that box size")
     main(p.parse_args())

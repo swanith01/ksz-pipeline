@@ -22,3 +22,6 @@ Direct = coeval Limber at the same box, D_3000 = 1.524 uK^2.
   size, so physics and replicas cannot be separated at low l here. Needs the 800 Mpc runs.
 - Native v3 amplitude ~180x low in power: native velocity conversion (raw/H0 in native_lightcone.py) suspected, pending script 39.
   Spike positions and the far fraction do not depend on the velocity units.
+
+**Correction (28 Oct 2026):** the native v3 rows above used the OLD loader (density-1 and velocity/H0, both wrong). With the fixed loader
+(cb3aad1) native v3 at l = 2000-4000 gives total 7.543, trunc 1.527 (= 0.98 x direct), far/total 0.80. See ../28Oct2026_limber_scope_all/.

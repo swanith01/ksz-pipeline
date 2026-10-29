@@ -114,16 +114,20 @@ def main():
               f"{ratio.min():.3f}-{ratio.max():.3f}", flush=True)
     la, Ca = io.read_amber_cl(os.path.join(cmb, 'cl_ksz.txt'))
     D_lim = (la, la * (la + 1) / (2 * np.pi) * Ca * Tcmb_uK**2)
+    # AMBER's Limber file starts at ell = la[0] (100): NaN outside, never
+    # np.interp's clamp (that gave a fake flat "Limber" at ell < 100)
+    lim_at = lambda x: np.interp(x, *D_lim, left=np.nan, right=np.nan)
+    print(f"  AMBER Limber cl_ksz.txt covers ell = {la.min():g}-{la.max():g}")
 
     print("\n   ell    total     diag     near      far   far/total   Limber   (diag+near)/Limber")
-    for lq in (30, 60, 100, 150, 200, 300, 500, 700):
+    for lq in (30, 60, 100, 150, 200, 300, 500, 700):  # nan = outside Limber range
         if lq > lmax:
             continue
         i = lq
         print(f"  {lq:4d}  {D['total'][i]:7.3f}  {D['diag'][i]:7.3f}  "
               f"{D['near'][i]:7.3f}  {D['far'][i]:7.3f}   {D['far'][i] / D['total'][i]:7.3f}"
-              f"   {np.interp(lq, *D_lim):6.3f}   "
-              f"{(D['diag'][i] + D['near'][i]) / np.interp(lq, *D_lim):6.3f}")
+              f"   {lim_at(lq):6.3f}   "
+              f"{(D['diag'][i] + D['near'][i]) / lim_at(lq):6.3f}")
 
     # ---- r(dchi) ----------------------------------------------------------
     bands = [tuple(int(x) for x in b.split(',')) for b in a.bands.split(';')]

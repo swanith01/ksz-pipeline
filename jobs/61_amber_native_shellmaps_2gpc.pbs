@@ -1,0 +1,59 @@
+#!/bin/bash
+#PBS -N amber_native_2gpc
+#PBS -l nodes=1:ppn=16
+#PBS -l walltime=24:00:00
+#PBS -j oe
+#PBS -o /user1/swanith/ksz-pipeline-amber/jobs/amber_native_shellmaps_2gpc.log
+
+# Same as job 60 (AMBER native HEALPix lightcone shell by shell, patch 0002,
+# then scripts/58) but in a 2 Gpc/h box, where z = 4.5-18.5 spans ~1.1 box
+# lengths (chi = 5265-7422 Mpc/h in L = 2000 Mpc/h): radial lattice returns
+# are (almost) outside the window and the box-scale excess moves from
+# ell ~ 130-180 (L = 256) to ell ~ 17-23. Tests whether tiling still matters
+# at all in a window of about one box (transverse images remain, ~19 deg).
+#
+# N = 512 (3.9 Mpc/h cells; the Chen+23 production grid is 2048^3, which is
+# unnecessary for ell <= 767 / pixels of ~24 Mpc/h). map_make particle count
+# ~1.8e10 (8x fewer than job 60), but the per-shell mesh work is 64x job 60.
+# Walltime is a GUESS (job 60: 1h26m).
+#
+# Patch 0001 (field dump) writes ~2 GB per shell at N = 512; the analysis
+# does not need it, so a background loop deletes fields_*.dat as they appear
+# (files older than 2 min), keeping disk use to a few GB. Check free disk
+# anyway: the kSZ maps themselves are 140 x 6 MB.
+#
+# BEFORE SUBMITTING: amber.x must already be rebuilt with 0002 (job 60 did it).
+
+set -e
+cd /user1/swanith/ksz-pipeline-amber
+source /apps/intel/oneapi/setvars.sh >/dev/null
+source /user1/swanith/miniconda3/etc/profile.d/conda.sh
+conda activate p21c_v3
+export LD_LIBRARY_PATH="$HOME/Healpix_3.83/lib:/apps/anaconda3/lib:$LD_LIBRARY_PATH"
+export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
+
+AMBER_X="$HOME/amber/src/amber.x"
+grep -q 'mapksz_' "$AMBER_X" || { echo "amber.x lacks patch 0002 -- run build_amber.sh first"; exit 1; }
+python -c "import healpy" || { echo "healpy missing in p21c_v3"; exit 1; }
+
+R=runs/native_shells_n512_L2000_nside256
+python scripts/make_amber_input.py --out "$R" \
+    --L 2000 --N 512 --zmid 8 --zdel 4 --zasy 3 --Mmin 1e8 --mfp 3.0 \
+    --cosmology chen2022 --mapmake write --nside 256 --czdel 0.1 --ncore 16
+mkdir -p "$R"/output/{cosmo,reion,grf,lpt,esf,mesh,cmb}
+df -h "$R" | tail -1
+
+( while true; do
+    find "$R/output/cmb" -name 'fields_*.dat' -mmin +2 -delete
+    sleep 120
+  done ) &
+CLEAN=$!
+trap 'kill $CLEAN 2>/dev/null || true' EXIT
+
+( cd "$R" && "$AMBER_X" < input/input.txt > output/log.txt 2>&1 )
+kill $CLEAN 2>/dev/null || true
+find "$R/output/cmb" -name 'fields_*.dat' -delete
+grep -q "AMBER completed" "$R/output/log.txt" || { tail -30 "$R/output/log.txt"; exit 1; }
+ls "$R"/output/cmb/mapksz_*.dat | wc -l
+
+python -u scripts/58_amber_native_shell_decomposition.py --run "$R"

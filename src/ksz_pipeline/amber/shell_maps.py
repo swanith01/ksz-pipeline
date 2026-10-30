@@ -214,3 +214,55 @@ def lattice_image_correlation(sm, L, m, scale=1.0, pixel_mask=None,
     va = sxx / cnt - (sx / cnt)**2
     vb = syy / cnt - (sy / cnt)**2
     return float(cov / np.sqrt(va * vb)), cnt
+
+
+# --------------------------------------------------------------------------
+# Thick slabs and cumulative pair sums (scripts/60)
+# --------------------------------------------------------------------------
+def slab_groups(chi_lo, chi_hi, thickness):
+    """
+    Greedy contiguous groups of shells: each slab collects shells until its
+    thickness chi_hi[last] - chi_lo[first] >= `thickness` (Mpc/h); the last
+    slab may be thinner. Returns a list of index arrays covering all shells.
+    """
+    groups, cur = [], [0]
+    for i in range(len(chi_lo)):
+        if i > 0:
+            cur.append(i)
+        if chi_hi[i] - chi_lo[cur[0]] >= thickness:
+            groups.append(np.array(cur))
+            cur = []
+    if cur:
+        groups.append(np.array(cur))
+    return [g for g in groups if g.size]
+
+
+def merge_blocks(C, groups):
+    """
+    Cross-spectra of slabs from those of shells: since slab maps are sums of
+    shell maps, C_slab[a, b] = sum_{i in a, j in b} C[i, j]. Total, and hence
+    diag + off, is conserved.
+    """
+    ns = C.shape[0]
+    M = np.zeros((len(groups), ns))
+    for a, g in enumerate(groups):
+        M[a, g] = 1.0
+    tmp = np.tensordot(M, C, axes=(1, 0))              # (slab, shell, ell)
+    return np.tensordot(M, tmp, axes=(1, 1)).transpose(1, 0, 2)
+
+
+def band_mean(D_ell, band):
+    """Mean of a D_ell-like array over ell in [band[0], band[1])."""
+    return float(np.mean(D_ell[band[0]:band[1]]))
+
+
+def cumulative_vs_separation(C, chi, toD, band, dmax_edges):
+    """
+    Band-mean D from all shell pairs (incl. diag) with |chi_i - chi_j| <=
+    each edge, for ell in [band[0], band[1]) with weights toD(ell).
+    Returns array len(dmax_edges).
+    """
+    l0, l1 = band
+    Cb = np.einsum('ijl,l->ij', C[:, :, l0:l1], toD[l0:l1]) / (l1 - l0)
+    d = np.abs(chi[:, None] - chi[None, :])
+    return np.array([Cb[d <= e].sum() for e in dmax_edges])

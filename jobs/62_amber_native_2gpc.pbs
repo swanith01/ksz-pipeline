@@ -1,0 +1,75 @@
+#!/bin/bash
+#PBS -N amber_native_2gpc_s
+#PBS -l nodes=1:ppn=16
+#PBS -l walltime=03:00:00
+#PBS -j oe
+#PBS -o /user1/swanith/ksz-pipeline-amber/jobs/amber_native_2gpc_62.log
+
+# 2 Gpc/h native HEALPix lightcone (N = 512, Nside = 256, 140 shells), seed and
+# field-keeping selectable:
+#   qsub -o jobs/amber_native_2gpc_s1.log -v SEED=1,KEEP=1 jobs/62_amber_native_2gpc.pbs   # same realization as job 61,
+#        keeps the ~300 GB of field dumps -> stitched flat-sky D_ell (scripts/55)
+#        on identical initial conditions + overlay (scripts/61). Delete the
+#        fields afterwards:  rm runs/native2gpc_s1_fields/output/cmb/fields_*.dat
+#   qsub -o jobs/amber_native_2gpc_s2.log -v SEED=2,KEEP=0 jobs/62_amber_native_2gpc.pbs   # second seed, dumps deleted
+#        as they appear (as job 61); only for the native low-ell scatter.
+# (-o on the command line overrides the default log path below, so the two jobs
+# do not overwrite each other's log.)
+# Each run: AMBER (~32 min) + scripts/58 (~8 min) + scripts/60 (~1 min); KEEP=1
+# adds scripts/55 and scripts/61. Run dir: runs/native2gpc_s<SEED>[_fields].
+# (Job 61 = seed 1 without fields: runs/native_shells_n512_L2000_nside256.)
+
+set -e
+SEED=${SEED:-1}
+KEEP=${KEEP:-0}
+cd /user1/swanith/ksz-pipeline-amber
+source /apps/intel/oneapi/setvars.sh >/dev/null
+source /user1/swanith/miniconda3/etc/profile.d/conda.sh
+conda activate p21c_v3
+export LD_LIBRARY_PATH="$HOME/Healpix_3.83/lib:/apps/anaconda3/lib:$LD_LIBRARY_PATH"
+export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
+
+AMBER_X="$HOME/amber/src/amber.x"
+grep -q 'mapksz_' "$AMBER_X" || { echo "amber.x lacks patch 0002"; exit 1; }
+python -c "import healpy" || { echo "healpy missing in p21c_v3"; exit 1; }
+
+R=runs/native2gpc_s${SEED}
+[ "$KEEP" = "1" ] && R=${R}_fields
+echo "run dir $R  seed $SEED  keep fields $KEEP"
+python scripts/make_amber_input.py --out "$R" \
+    --L 2000 --N 512 --zmid 8 --zdel 4 --zasy 3 --Mmin 1e8 --mfp 3.0 \
+    --cosmology chen2022 --mapmake write --nside 256 --czdel 0.1 --ncore 16 --seed "$SEED"
+mkdir -p "$R"/output/{cosmo,reion,grf,lpt,esf,mesh,cmb}
+df -h "$R" | tail -1
+
+if [ "$KEEP" != "1" ]; then
+  ( while true; do
+      find "$R/output/cmb" -name 'fields_*.dat' -mmin +2 -delete
+      sleep 120
+    done ) &
+  CLEAN=$!
+  trap 'kill $CLEAN 2>/dev/null || true' EXIT
+fi
+
+( cd "$R" && "$AMBER_X" < input/input.txt > output/log.txt 2>&1 )
+[ "$KEEP" != "1" ] && { kill $CLEAN 2>/dev/null || true; find "$R/output/cmb" -name 'fields_*.dat' -delete; }
+grep -q "AMBER completed" "$R/output/log.txt" || { tail -30 "$R/output/log.txt"; exit 1; }
+grep "CMB make\|AMBER completed" "$R/output/log.txt" | tail -2
+ls "$R"/output/cmb/mapksz_*.dat | wc -l
+
+python -u scripts/58_amber_native_shell_decomposition.py --run "$R"
+python -u scripts/60_native_thick_slabs.py --run "$R"
+
+OTHER=runs/native_shells_n512_L2000_nside256      # job 61, seed 1
+if [ "$KEEP" = "1" ]; then
+  # same-realization stitched lightcone (LOS ~1.08 box lengths: the last 8% wraps,
+  # at z > ~17.9 where x_e = 0, so harmless; the script prints a warning)
+  python -u scripts/55_amber_stitched_streaming.py --run "$R" --mode momentum \
+      --no-rotation --zmin 4.55 --zmax 18.45 \
+      --out data/plots/amber_stitched_vs_limber_2gpc_momentum_norot_${R##*/}.png
+  python -u scripts/61_overlay_native_vs_stitched.py --native-run "$R" \
+      --stitched-npz "$R/stitched_streaming_momentum_norot.npz"
+else
+  python -u scripts/61_overlay_native_vs_stitched.py --native-run "$OTHER" "$R" \
+      --out data/plots/native_two_seeds_L2000.png
+fi

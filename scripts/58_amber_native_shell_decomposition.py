@@ -172,14 +172,23 @@ def main():
 
     fig, ax = plt.subplots(1, 3, figsize=(18, 5))
     sl = slice(2, lmax + 1)
+    # SIGNED values on a symlog axis (near and far are mostly negative: an
+    # absolute-value plot makes the total look smaller than its parts for no
+    # visible reason). Linear between +-linthresh, log outside.
+    lab = {'total': 'total = diag + near + far',
+           'diag': r'diag: $i = j$',
+           'near': r'near: $i \neq j$, $|\Delta\chi| < L/2$ = %g Mpc/h' % (L / 2),
+           'far': r'far: $|\Delta\chi| \geq L/2$'}
     for k, sty in (('total', 'k-'), ('diag', 'C0-'), ('near', 'C1-'), ('far', 'C3-')):
-        ax[0].plot(ell[sl], np.abs(D[k][sl]), sty, lw=1.5,
-                   label=f'{k}' + (' (|.|)' if k in ('near', 'far') else ''))
+        ax[0].plot(ell[sl], D[k][sl], sty, lw=1.5 if k != 'far' else 1.0, label=lab[k])
     if D_hpx:
         ax[0].plot(*D_hpx, 'k:', lw=1, label='AMBER cl_ksz_healpix.txt')
     ax[0].plot(*D_lim, '--', color='0.5', lw=1.5, label='AMBER Limber cl_ksz.txt')
-    ax[0].set(xscale='log', yscale='log', xlabel=r'$\ell$', ylabel=r'$D_\ell\ [\mu K^2]$',
-              xlim=(10, lmax), title='native map: diag / off(near, far)')
+    ax[0].axhline(0, color='0.8', lw=0.6)
+    ax[0].set_xscale('log')
+    ax[0].set_yscale('symlog', linthresh=1e-2, linscale=0.4)
+    ax[0].set(xlabel=r'$\ell$', ylabel=r'$D_\ell\ [\mu K^2]$ (signed; linear within $\pm 0.01$)',
+              xlim=(10, lmax), title='native map: diag / near / far (signed)')
     ax[0].legend(fontsize=8)
     xc = 0.5 * (edges[1:] + edges[:-1])
     for b, r in R.items():

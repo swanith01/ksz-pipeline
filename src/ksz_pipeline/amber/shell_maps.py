@@ -266,3 +266,37 @@ def cumulative_vs_separation(C, chi, toD, band, dmax_edges):
     Cb = np.einsum('ijl,l->ij', C[:, :, l0:l1], toD[l0:l1]) / (l1 - l0)
     d = np.abs(chi[:, None] - chi[None, :])
     return np.array([Cb[d <= e].sum() for e in dmax_edges])
+
+
+def pixel_window(nside, lmax=None, data_dir=None):
+    """
+    HEALPix temperature pixel window w_l (amplitude, so power is w_l**2) for
+    l = 0..lmax (default 3*nside-1), read from the Healpix data file
+    pixel_window_n<nside>.fits. Searched in data_dir, $HEALPIX_DATA,
+    $HEALPIX/data and ~/Healpix_3.83/data; else healpy.pixwin (which needs a
+    download). The native map is a pixel average, so its D_l is suppressed by
+    w_l**2; AMBER's Limber curve has no such window.
+    """
+    import os
+    lmax = 3 * nside - 1 if lmax is None else int(lmax)
+    name = f"pixel_window_n{nside:04d}.fits"
+    dirs = [data_dir, os.environ.get('HEALPIX_DATA'),
+            os.path.join(os.environ['HEALPIX'], 'data') if os.environ.get('HEALPIX') else None,
+            os.path.expanduser('~/Healpix_3.83/data')]
+    for d in dirs:
+        if d and os.path.isfile(os.path.join(d, name)):
+            from astropy.io import fits
+            with fits.open(os.path.join(d, name)) as h:
+                tab = h[1].data
+                col = 'TEMPERATURE' if 'TEMPERATURE' in tab.names else tab.names[0]
+                w = np.asarray(tab[col], float).ravel()
+            if len(w) <= lmax:
+                raise ValueError(f"{name} has lmax={len(w) - 1} < requested {lmax}")
+            return w[:lmax + 1]
+    try:
+        import healpy as hp
+        return np.asarray(hp.pixwin(nside, lmax=lmax), float)
+    except Exception as e:                                   # no data, no download
+        raise FileNotFoundError(
+            f"{name} not found (looked in {[d for d in dirs if d]}); pass "
+            f"--pixwin-dir, e.g. ~/Healpix_3.83/data") from e

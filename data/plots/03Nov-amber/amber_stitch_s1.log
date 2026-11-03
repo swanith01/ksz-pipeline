@@ -1,0 +1,35 @@
+run runs/native2gpc_s1_fields: N=512, L=2857.1 Mpc (cell 5.580), cosmology=chen2022
+LOS z=4.550-18.379: 552 slices, span 3075 Mpc = 1.08 box lengths, 140 snapshots
+  WARNING: --no-rotation with a LOS of 1.08 box lengths -- periodic repeats are NOT broken
+  slice 50/552  z=5.041  x_e=1.0000  768s elapsed, ~7709s left  | rms vel-path/mom-path 1.000  rho min -0.197, frac rho<0.05 3.17e-04
+  slice 100/552  z=5.611  x_e=1.0000  1592s elapsed, ~7196s left  | rms vel-path/mom-path 1.000  rho min -0.0608, frac rho<0.05 7.25e-05
+  slice 150/552  z=6.265  x_e=1.0000  2473s elapsed, ~6628s left  | rms vel-path/mom-path 1.000  rho min -0.00808, frac rho<0.05 7.63e-06
+  slice 200/552  z=7.020  x_e=0.9089  3252s elapsed, ~5723s left  | rms vel-path/mom-path 1.000  rho min 0.0714, frac rho<0.05 0.00e+00
+  slice 250/552  z=7.900  x_e=0.4532  4207s elapsed, ~5083s left  | rms vel-path/mom-path 1.000  rho min 0.118, frac rho<0.05 0.00e+00
+  slice 300/552  z=8.932  x_e=0.1892  5159s elapsed, ~4333s left  | rms vel-path/mom-path 1.000  rho min 0.262, frac rho<0.05 0.00e+00
+  slice 350/552  z=10.154  x_e=0.0671  6185s elapsed, ~3570s left  | rms vel-path/mom-path 1.000  rho min 0.22, frac rho<0.05 0.00e+00
+  slice 400/552  z=11.616  x_e=0.0195  7333s elapsed, ~2787s left  | rms vel-path/mom-path 1.000  rho min 0.398, frac rho<0.05 0.00e+00
+  slice 450/552  z=13.385  x_e=0.0040  8523s elapsed, ~1932s left  | rms vel-path/mom-path 1.000  rho min 0.431, frac rho<0.05 0.00e+00
+  slice 500/552  z=15.555  x_e=0.0006  10083s elapsed, ~1049s left  | rms vel-path/mom-path 1.000  rho min 0.527, frac rho<0.05 0.00e+00
+  slice 550/552  z=18.257  x_e=0.0000  12011s elapsed, ~44s left  | rms vel-path/mom-path 1.000  rho min 0.601, frac rho<0.05 0.00e+00
+streamed in 12093s; chi_eff total 8403.1, patchy 9058.4 Mpc; patchy window (6.860273037755559, 17.608570223653327)
+1D Nyquist: ell ~ 4731 (total), 5100 (patchy)
+
+   ell   stitched(total)  stitched(patchy)   Chen+23
+    500      0.9693           0.8794     0.6365
+   1000      1.7803           1.4694     1.2537
+   2000      2.2981           1.9166     1.7167
+   3000      2.3998           1.9959     1.6776
+   5000      3.1233           2.5837     1.4097
+   8000      3.2869           2.8951     1.1150
+
+wrote runs/native2gpc_s1_fields/stitched_streaming_momentum_norot.npz
+wrote data/plots/amber_stitched_vs_limber_2gpc_momentum_norot_native2gpc_s1_fields.png
+band-mean D_ell [uK^2]
+  ell band   native[native2gpc_s1_fiel]   stitched    Limber
+   100-200                      1.352      1.500     0.082
+   200-300                      0.572      0.719     0.245
+   300-500                      0.564      0.663     0.591
+   500-767                      0.705      1.170     1.101
+
+wrote data/plots/native_vs_stitched_native2gpc_s1_fields.png

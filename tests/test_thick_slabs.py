@@ -65,11 +65,11 @@ def test_cumulative_reaches_total():
     np.testing.assert_allclose(cum[1], C[:, :, 2:10].sum() / 8, rtol=1e-12)
 
 
-def _make_run(path, seed):
+def _make_run(path, seed, nside=16):
     cmb = path / 'output' / 'cmb'
     cmb.mkdir(parents=True)
     json.dump({'L': 400.0, 'amber_params': {'Tcmb': 2.725}}, open(path / 'amber_run.json', 'w'))
-    _write_run(cmb, _field(True, seed=seed), np.arange(1000.0, 1241.0, 10.0), nside=16)
+    _write_run(cmb, _field(True, seed=seed), np.arange(1000.0, 1241.0, 10.0), nside=nside)
     ell = np.arange(10, 60, 5.0)
     np.savetxt(cmb / 'cl_ksz.txt', np.c_[ell, 1e-12 / ell**2], header='ell C')
 
@@ -98,3 +98,28 @@ def test_scripts_60_and_61_smoke(tmp_path, monkeypatch):
               '--out', str(tmp_path / 'ov.png')])
     assert (tmp_path / 'ov.png').stat().st_size > 10_000
     assert any(p.name.startswith('native_thick_slabs_') for p in (tmp_path / 'data' / 'plots').iterdir())
+
+
+def test_script_61_runs_with_different_nside(tmp_path, monkeypatch, capsys):
+    """Overlay of a high-Nside and a low-Nside native run (the Nside=512 vs 256
+    comparison): bins reach the larger lmax, the smaller run is NaN above its
+    own 3*Nside-1, and nothing raises."""
+    s58 = _load('58_amber_native_shell_decomposition')
+    s61 = _load('61_overlay_native_vs_stitched')
+    runs = []
+    for name, nside in (('hi', 32), ('lo', 16)):
+        r = tmp_path / name
+        _make_run(r, seed=1, nside=nside)
+        runs.append(str(r))
+    monkeypatch.chdir(tmp_path)
+    for r in runs:
+        monkeypatch.setattr(sys, 'argv', ['58', '--run', r])
+        s58.main()
+    s61.main(['--native-run', *runs, '--bands', '10,20;20,40;60,90',
+              '--out', str(tmp_path / 'ov2.png')])
+    out = capsys.readouterr().out
+    assert (tmp_path / 'ov2.png').stat().st_size > 10_000
+    assert 'run2/run1' in out
+    # the band above the low-Nside run's lmax (47) is NaN for run 2 only
+    row = [l for l in out.splitlines() if l.strip().startswith('60-90')][0]
+    assert 'nan' in row.lower()

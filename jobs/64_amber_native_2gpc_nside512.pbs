@@ -1,0 +1,83 @@
+#!/bin/bash
+#PBS -N amber_native_ns512
+#PBS -l nodes=1:ppn=16
+#PBS -l walltime=08:00:00
+#PBS -j oe
+#PBS -o /user1/swanith/ksz-pipeline-amber/jobs/amber_native_2gpc_ns512.log
+
+# 2 Gpc/h native HEALPix lightcone at Nside = 512 (lmax = 1535), SAME realization
+# as job 62 / seed 1 (N = 512, L = 2000 Mpc/h, 140 shells, same input except Nside),
+# so that the native map reaches ell ~ 1000-1500 and can be overlaid on the
+# stitched flat-sky D_ell already computed on seed 1 (job 63 / 1759136).
+#
+#   qsub -o jobs/amber_native_2gpc_ns512.log jobs/64_amber_native_2gpc_nside512.pbs
+#
+# Needs from earlier jobs (checked below, aborts early if missing):
+#   runs/native2gpc_s1_fields/stitched_streaming_momentum_norot.npz   (job 63)
+#   runs/native2gpc_s1_fields/native_shells.npz                       (job 62, Nside 256)
+# Does NOT keep the field dumps (deleted as they appear, as in job 61), so it
+# needs ~30 GB free, not 300 GB. If the disk check fails, free the field dumps of
+# the finished seed-1 run first (its results are in the npz files):
+#   rm runs/native2gpc_s1_fields/output/cmb/fields_*.dat
+#
+# Steps: AMBER (as job 62, but 4x more pixels per map: maps are ~25 MB/shell),
+# scripts/58 (all-sky diag/near/far + lattice test; heavier than at Nside 256),
+# scripts/60 (thick slabs, bands to ell = 1535), scripts/61 (overlay: Nside 512
+# native, Nside 256 native, stitched, Limber). The overlay also checks that the
+# Nside 512 and 256 native spectra agree at ell <~ 300 (same realization).
+# Nothing is pushed anywhere; patch 0002 is local, not submitted upstream.
+
+set -e
+SEED=1
+NSIDE=512
+cd /user1/swanith/ksz-pipeline-amber
+source /apps/intel/oneapi/setvars.sh >/dev/null
+source /user1/swanith/miniconda3/etc/profile.d/conda.sh
+conda activate p21c_v3
+export LD_LIBRARY_PATH="$HOME/Healpix_3.83/lib:/apps/anaconda3/lib:$LD_LIBRARY_PATH"
+export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
+
+AMBER_X="$HOME/amber/src/amber.x"
+grep -q 'mapksz_' "$AMBER_X" || { echo "amber.x lacks patch 0002"; exit 1; }
+python -c "import healpy" || { echo "healpy missing in p21c_v3"; exit 1; }
+
+S1=runs/native2gpc_s1_fields
+STITCHED=$S1/stitched_streaming_momentum_norot.npz
+[ -f "$STITCHED" ] || { echo "missing $STITCHED (run job 63 first)"; exit 1; }
+[ -f "$S1/native_shells.npz" ] || { echo "missing $S1/native_shells.npz"; exit 1; }
+
+R=runs/native2gpc_s${SEED}_nside${NSIDE}
+echo "run dir $R  seed $SEED  Nside $NSIDE"
+mkdir -p "$R"
+avail_gb=$(df -P "$R" | awk 'NR==2 {printf "%d", $4/1048576}')
+echo "free disk: ${avail_gb} GB"
+[ "$avail_gb" -ge 50 ] || { echo "need >= 50 GB free; free the seed-1 field dumps first"; exit 1; }
+
+python scripts/make_amber_input.py --out "$R" \
+    --L 2000 --N 512 --zmid 8 --zdel 4 --zasy 3 --Mmin 1e8 --mfp 3.0 \
+    --cosmology chen2022 --mapmake write --nside "$NSIDE" --czdel 0.1 --ncore 16 --seed "$SEED"
+mkdir -p "$R"/output/{cosmo,reion,grf,lpt,esf,mesh,cmb}
+df -h "$R" | tail -1
+
+( while true; do
+    find "$R/output/cmb" -name 'fields_*.dat' -mmin +2 -delete
+    sleep 120
+  done ) &
+CLEAN=$!
+trap 'kill $CLEAN 2>/dev/null || true' EXIT
+
+( cd "$R" && "$AMBER_X" < input/input.txt > output/log.txt 2>&1 )
+kill $CLEAN 2>/dev/null || true
+find "$R/output/cmb" -name 'fields_*.dat' -delete
+grep -q "AMBER completed" "$R/output/log.txt" || { tail -30 "$R/output/log.txt"; exit 1; }
+grep "CMB make\|AMBER completed" "$R/output/log.txt" | tail -2
+ls "$R"/output/cmb/mapksz_*.dat | wc -l
+du -sh "$R"
+
+BANDS="100,200;200,300;300,500;500,767;767,1100;1100,1535"
+python -u scripts/58_amber_native_shell_decomposition.py --run "$R" \
+    --bands '20,100;100,300;300,700;700,1100;1100,1500'
+python -u scripts/60_native_thick_slabs.py --run "$R" --bands "$BANDS"
+python -u scripts/61_overlay_native_vs_stitched.py \
+    --native-run "$R" "$S1" --stitched-npz "$STITCHED" --bands "$BANDS" \
+    --out data/plots/native_nside512_vs_256_vs_stitched_L2000.png

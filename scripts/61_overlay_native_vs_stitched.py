@@ -35,8 +35,15 @@ def log_bins(lo, hi, n):
     return list(zip(e[:-1], e[1:]))
 
 
+def _mean_or_nan(x):
+    x = np.asarray(x, float)
+    return np.nan if x.size == 0 or np.all(np.isnan(x)) else float(np.nanmean(x))
+
+
 def binned(ell, D, bins):
-    return np.array([np.nanmean(D[(ell >= b[0]) & (ell < b[1])]) for b in bins])
+    """Mean D in each ell bin; NaN where the run has no ell there (e.g. a
+    lower-Nside run above its 3*Nside-1)."""
+    return np.array([_mean_or_nan(D[(ell >= b[0]) & (ell < b[1])]) for b in bins])
 
 
 def loglog_interp(x, xp, fp):
@@ -57,7 +64,7 @@ def main(argv=None):
         d = np.load(os.path.join(r, 'native_shells.npz'))
         nat.append(dict(name=os.path.basename(os.path.normpath(r)), ell=d['ell'],
                         D=d['D_total'], ll=d['ell_limber'], Dl=d['D_limber'], L=float(d['L'])))
-    lmax = int(nat[0]['ell'].max())
+    lmax = max(int(n['ell'].max()) for n in nat)      # runs may differ in Nside
     bins = log_bins(20, lmax, 16)
     bc = np.array([np.sqrt(b[0] * b[1]) for b in bins])
     nb = [binned(n['ell'], n['D'], bins) for n in nat]
@@ -75,7 +82,7 @@ def main(argv=None):
     for b in bands:
         row = f"  {b[0]:4d}-{b[1]:<4d}"
         for n in nat:
-            row += f"  {np.nanmean(n['D'][b[0]:b[1]]):24.3f}"
+            row += f"  {_mean_or_nan(n['D'][b[0]:b[1]]):24.3f}"
         if st is not None:
             m = (st[0] >= b[0]) & (st[0] < b[1])
             row += f"  {np.nanmean(st[1][m]) if m.any() else float('nan'):9.3f}"
@@ -86,7 +93,8 @@ def main(argv=None):
         print(row)
     if len(nat) > 1:
         r = nb[1] / nb[0]
-        print("\nbinned native ratio seed2/seed1 per ell bin (cosmic variance at low ell):")
+        print(f"\nbinned native ratio run2/run1 per ell bin "
+              f"(run1 = {nat[0]['name']}, run2 = {nat[1]['name']}; NaN above a run's lmax):")
         print("  " + "  ".join(f"{c:.0f}:{v:.2f}" for c, v in zip(bc, r)))
 
     fig, ax = plt.subplots(2, 1, figsize=(9, 8), sharex=True,
